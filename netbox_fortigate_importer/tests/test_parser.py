@@ -1,0 +1,250 @@
+"""The CLI parser, decryption and secret removal. No database needed."""
+import json
+
+from django.test import SimpleTestCase
+
+from netbox_fortigate_importer.extract import extract, load
+from netbox_fortigate_importer.parser import (
+    DecryptionError, ParseError, PasswordRequired, UnsupportedFormat, parse, read_config_bytes,
+)
+from netbox_fortigate_importer.parser.cli import tokenize_line
+from netbox_fortigate_importer.parser.layout import layout
+
+from .utils import ALL_FULL_CONFIGS, AZURE_100D, BATFISH, BRANCH, HQ, XUTILS_MULTI_VDOM, encrypt_backup, read
+
+#: Text that must never survive parsing (fixtures carry fake secrets).
+SECRET_MARKERS = ('ENC ', 'psksecret', 'PRIVATE KEY', 'BEGIN CERTIFICATE', 's3cr3t-community',
+                  'R1ZmZGs0b3Bs', 'bm90LWEtcmVhbC1wYXNzd29yZA')
+
+
+class TokenizerTests(SimpleTestCase):
+
+    def test_quotes_and_joins(self):
+        tokens, _, _ = tokenize_line('set member "a b" c"d"e \'f\'')
+        self.assertEqual(tokens, ['set', 'member', 'a b', 'cde', 'f'])
+
+    def test_escapes(self):
+        tokens, _, _ = tokenize_line(r'set comment "say \"hi\" \\ ok"')
+        self.assertEqual(tokens, ['set', 'comment', 'say "hi" \\ ok'])
+
+    def test_multiline_quoted_value(self):
+        tokens, pos, repaired = tokenize_line('set buffer "line1\nline2"\nnext\n')
+        self.assertFalse(repaired)
+        self.assertEqual(tokens, ['set', 'buffer', 'line1\nline2'])
+        self.assertEqual(tokenize_line('set buffer "line1\nline2"\nnext\n', pos)[0], ['next'])
+
+    def test_stray_quote_is_closed_at_end_of_line(self):
+        result = parse('config firewall policy\nedit 1\nset service ""HTTPS" "HTTP"\nset action accept\nnext\nend\n')
+        policy = result.root.tables['firewall policy'].entries['1']
+        self.assertEqual(policy.values['action'], ['accept'])
+        self.assertIn('unbalanced quote', result.warnings[0])
+
+    def test_batfish_replacemsg_escapes(self):
+        """Batfish's own expectation for its odd-quoting fixture."""
+        result = parse((BATFISH / 'fortios_replacemsg.conf').read_text())
+        buffer = result.root.tables['system replacemsg admin pre_admin-disclaimer-text'].values['buffer']
+        self.assertEqual(buffer, ['"npre"\'\'\\nabc\\" "\nlastline'])
+
+
+class ParserTests(SimpleTestCase):
+
+    def test_all_full_configs_parse_cleanly(self):
+        # The fortios-xutils sample has one typo (`set service ""HTTPS" "HTTP"`).
+        expected = {XUTILS_MULTI_VDOM.name: ['line 3884: unbalanced quote, closed at the end of the line']}
+        for path in ALL_FULL_CONFIGS:
+            with self.subTest(path=path.name):
+                result = parse(read_config_bytes(read(path)))
+                self.assertEqual(result.warnings, expected.get(path.name, []))
+                self.assertGreater(len(result.root.tables), 1)
+
+    def test_batfish_snippets_parse(self):
+        for path in sorted(BATFISH.glob('*.conf')):
+            with self.subTest(path=path.name):
+                result = parse(path.read_text())
+                self.assertIn('system global', result.root.tables)
+
+    def test_rename_and_move(self):
+        result = parse((BATFISH / 'rename.conf').read_text())
+        services = result.root.tables['firewall service custom'].entries
+        self.assertIn('new_service1', services)
+        self.assertNotIn('old_service1', services)
+        result = parse((BATFISH / 'policy_move.conf').read_text())
+        self.assertEqual(list(result.root.tables['firewall policy'].entries), ['5', '1', '2', '4', '3'])
+
+    def test_crlf_bom_and_prompt(self):
+        text = '﻿FGT # show full-configuration\r\nconfig system global\r\n    set hostname "x"\r\nend\r\n'
+        result = parse(text)
+        self.assertEqual(result.root.tables['system global'].values['hostname'], ['x'])
+        self.assertEqual(result.warnings, [])
+
+    def test_truncated_file_warns(self):
+        result = parse('config system interface\n    edit "port1"\n        set ip 10.0.0.1 255.0.0.0\n')
+        self.assertTrue(any('truncated' in w for w in result.warnings))
+
+    def test_not_a_config(self):
+        with self.assertRaises(ParseError):
+            parse('hello world\nthis is not a firewall\n')
+
+    def test_unset_and_append(self):
+        result = parse('config firewall addrgrp\nedit g\nset member a b\nappend member c\nunselect member a\nnext\n'
+                       'edit h\nset comment x\nunset comment\nnext\nend\n')
+        groups = result.root.tables['firewall addrgrp'].entries
+        self.assertEqual(groups['g'].values['member'], ['b', 'c'])
+        self.assertNotIn('comment', groups['h'].values)
+
+
+class SecretTests(SimpleTestCase):
+
+    def test_no_secret_survives_any_fixture(self):
+        for path in ALL_FULL_CONFIGS:
+            with self.subTest(path=path.name):
+                document = json.dumps(load(read(path)))
+                for marker in SECRET_MARKERS:
+                    self.assertNotIn(marker, document)
+
+    def test_secrets_are_counted_not_kept(self):
+        result = parse(read_config_bytes(read(HQ)))
+        self.assertGreaterEqual(result.secrets_removed, 8)
+        ha = result.root.tables['global'].tables['system ha']
+        self.assertNotIn('password', ha.values)
+        self.assertEqual(ha.values['group-name'], ['HQ-FW-HA'])
+        community = result.root.tables['global'].tables['system snmp community'].entries['1']
+        self.assertNotIn('name', community.values)
+
+
+class FileTests(SimpleTestCase):
+
+    def test_encrypted_round_trip(self):
+        text = read(BRANCH).decode()
+        data = encrypt_backup(text, 'correct horse')
+        with self.assertRaises(PasswordRequired) as ctx:
+            read_config_bytes(data)
+        self.assertEqual(ctx.exception.header['model'], 'FGT60F')
+        with self.assertRaises(DecryptionError):
+            read_config_bytes(data, 'wrong')
+        self.assertEqual(read_config_bytes(data, 'correct horse'), text)
+
+    def test_gzip(self):
+        import gzip
+
+        self.assertEqual(read_config_bytes(gzip.compress(read(BRANCH))), read(BRANCH).decode())
+
+    def test_truncated_encrypted(self):
+        with self.assertRaises(UnsupportedFormat):
+            read_config_bytes(b'#FGBK|4|FGT60F|7|02|1639|\nshort', 'x')
+
+    def test_binary_and_empty(self):
+        with self.assertRaises(UnsupportedFormat):
+            read_config_bytes(b'')
+        with self.assertRaises(UnsupportedFormat):
+            read_config_bytes(b'\x89PNG\r\n\x1a\n\x00\x00\x00')
+
+
+class LayoutTests(SimpleTestCase):
+
+    def test_hq_header_and_vdoms(self):
+        config = layout(parse(read_config_bytes(read(HQ))))
+        self.assertEqual(config.info.model_name, 'FortiGate-100F')
+        self.assertEqual(config.info.version, '7.4.3')
+        self.assertTrue(config.info.multi_vdom)
+        self.assertEqual(config.info.serial, 'FG100FTK20001234')
+        self.assertEqual(config.info.hostname, 'HQ-FW01')
+        self.assertEqual(list(config.vdoms), ['root', 'CUST-A'])
+        self.assertFalse(config.info.is_vm)
+
+    def test_old_and_vm_headers(self):
+        config = layout(parse(read_config_bytes(read(AZURE_100D))))
+        self.assertEqual((config.info.model_name, config.info.version), ('FortiGate-100D', '5.4'))
+        self.assertEqual(config.info.opmode, 'nat')
+        config = layout(parse(read_config_bytes(read(XUTILS_MULTI_VDOM))))
+        self.assertTrue(config.info.is_vm)
+        self.assertTrue(config.info.multi_vdom)
+        self.assertEqual(list(config.vdoms), ['root', 'ro'])
+
+
+class ExtractTests(SimpleTestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.hq = load(read(HQ))
+        cls.branch = load(read(BRANCH))
+
+    def interface(self, name, document=None):
+        return next(i for i in (document or self.hq)['interfaces'] if i['name'] == name)
+
+    def test_interfaces(self):
+        self.assertEqual(self.interface('lacp-core')['kind'], 'lag')
+        self.assertEqual(self.interface('lacp-core')['members'], ['x1', 'x2'])
+        vlan10 = self.interface('vlan10')
+        self.assertEqual((vlan10['kind'], vlan10['vlan_id'], vlan10['parent']), ('vlan', 10, 'lacp-core'))
+        self.assertEqual(vlan10['ip'], '10.10.10.1/24')
+        self.assertEqual(vlan10['secondary_ips'], ['10.10.11.1/24'])
+        self.assertEqual(self.interface('vlan100')['vdom'], 'CUST-A')
+        self.assertEqual(self.interface('port3')['bridge'], 'lan')
+        self.assertEqual(self.interface('to-branch1')['ip'], '169.254.10.1/30')
+        self.assertIsNone(self.interface('wan2')['ip'])  # DHCP
+        self.assertFalse(self.interface('port15')['enabled'])
+        self.assertEqual(self.interface('dmz')['mtu'], 1400)
+        self.assertEqual(self.interface('wan1')['ipv6'], ['2001:db8:100::10/64'])
+        self.assertEqual(self.interface('vlan20')['vrrp'][0]['address'], '10.20.0.1')
+        names = [i['name'] for i in self.hq['interfaces']]
+        self.assertNotIn('ssl.root', names)
+
+    def test_ha_and_settings(self):
+        self.assertEqual(self.hq['ha']['group_name'], 'HQ-FW-HA')
+        self.assertEqual(self.hq['ha']['hbdev'], ['ha1', 'ha2'])
+        self.assertIsNone(self.branch['ha'])
+        self.assertEqual(self.hq['settings']['dns']['servers'], ['9.9.9.9', '149.112.112.112'])
+        self.assertEqual(self.hq['settings']['ntp']['servers'], ['ntp1.corp.example', '192.0.2.123'])
+
+    def test_firewall(self):
+        root = self.hq['vdoms']['root']
+        addresses = {a['name']: a for a in root['addresses']}
+        self.assertEqual(addresses['NET-USERS']['prefix'], '10.10.10.0/24')
+        self.assertEqual(addresses['R-DHCP-POOL']['start'], '10.10.10.100')
+        self.assertEqual(addresses['FQDN-UPDATES']['fqdn'], 'updates.vendor.example')
+        self.assertEqual(addresses['dmz address']['prefix'], '172.16.50.0/24')
+        groups = {g['name']: g for g in root['address_groups']}
+        self.assertEqual(groups['GRP-ALL-SITES']['members'], ['GRP-INTERNAL', 'NET-BRANCH1'])
+        services = {s['name']: s for s in root['services']}
+        self.assertEqual(services['TCP-8000-8099']['tcp'][0], {'low': 8000, 'high': 8099, 'src_low': 1024, 'src_high': 65535})
+        policies = {p['id']: p for p in root['policies']}
+        self.assertEqual(policies[3]['srcintf'], ['INSIDE', 'lan'])
+        self.assertFalse(policies[5]['enabled'])
+        self.assertEqual(root['vips'][0]['mappedport']['low'], 8443)
+        self.assertEqual(root['ip_pools'][0]['start'], '203.0.113.12')
+
+    def test_routing(self):
+        root = self.hq['vdoms']['root']
+        routes = {r['seq']: r for r in root['static_routes'] if r['family'] == 4}
+        self.assertEqual(routes[1]['dst'], '0.0.0.0/0')
+        self.assertEqual(routes[1]['gateway'], '203.0.113.9')
+        self.assertTrue(routes[2]['blackhole'])
+        self.assertFalse(routes[4]['enabled'])
+        self.assertEqual(root['bgp']['as'], '65010')
+        self.assertEqual(len(root['bgp']['neighbors']), 2)
+        self.assertEqual(root['bgp']['redistribute'], {'connected': {'route_map': None}})
+        self.assertEqual([a['id'] for a in root['ospf']['areas']], ['0.0.0.0', '0.0.0.10'])
+        self.assertEqual(root['prefix_lists'][0]['rules'][1]['prefix'], 'any')
+        self.assertEqual(root['route_maps'][1]['rules'][0]['set'], {'local-preference': '200'})
+
+    def test_vpn(self):
+        phase1 = self.hq['vdoms']['root']['ipsec_phase1'][0]
+        self.assertEqual(phase1['remote_gw'], '198.51.100.20')
+        self.assertEqual(phase1['proposals'], [['aes256', 'sha256'], ['aes256gcm', 'prfsha384']]
+                         if isinstance(phase1['proposals'][0], list) else [('aes256', 'sha256'), ('aes256gcm', 'prfsha384')])
+        self.assertEqual(phase1['dhgroups'], [20, 21])
+        phase2 = self.hq['vdoms']['root']['ipsec_phase2'][0]
+        self.assertEqual(phase2['src'], {'type': 'subnet', 'value': '10.0.0.0/8'})
+
+    def test_document_is_json(self):
+        self.assertEqual(json.loads(json.dumps(self.hq))['info']['hostname'], 'HQ-FW01')
+
+    def test_stats(self):
+        self.assertIn('system admin', self.hq['stats']['not_imported'])
+        self.assertGreater(self.hq['stats']['lines'], 700)
+
+    def test_extract_accepts_parse_result(self):
+        document = extract(parse(read(BRANCH).decode()))
+        self.assertEqual(document['info']['model_name'], 'FortiGate-60F')

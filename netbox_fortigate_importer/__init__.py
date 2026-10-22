@@ -43,9 +43,6 @@ class FortiGateImporterConfig(PluginConfig):
         'continue_on_error': False,
     }
 
-    menu = 'navigation.menu'
-    template_extensions = 'template_content.template_extensions'
-
     def ready(self):
         super().ready()
         from . import integrations

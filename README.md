@@ -12,8 +12,11 @@ deleted objects wait for a person to decide.
    An encrypted backup asks for its password.
 2. **Match**: the firewall is found by its serial number, or by its
    hostname when exactly one FortiGate has it and no serial number says
-   otherwise. When several FortiGates share the hostname, you choose (the
-   matches are suggested). The
+   otherwise. A FortiOS default hostname (the model, such as
+   `FortiGate-VM64` or `FGT60F`) or a serial number used as hostname never
+   picks a FortiGate on its own. When several FortiGates share the
+   hostname, or it is a default one, you choose (the matches are
+   suggested). The
    first time, you choose its NetBox device, or ask for a new one. A new
    device is not created yet: it is one of the changes in the plan, written
    on apply and removed again by a rollback.

@@ -200,6 +200,16 @@ A tunnel between two FortiGates that are both imported is one Tunnel:
 its name is built from both public addresses, sorted, so the second
 firewall finds and joins the tunnel the first created.
 
+## Matching a configuration to its FortiGate
+
+`services.find_binding()`: the binding with the configuration's serial
+number, else the only binding with its hostname whose serial doesn't
+contradict it. `is_generic_hostname()` keeps FortiOS default hostnames (the
+model name or code: `FortiGate-VM64`, `FGT60F`, `FGVM64`, `FortiWiFi-60F`)
+and serial numbers out of that: they never match on their own, and the
+device choice page suggests them (`candidate_devices()`) for the user to
+confirm.
+
 ## A new device
 
 Choosing "a new device" writes nothing to NetBox. The FortiGate (binding)

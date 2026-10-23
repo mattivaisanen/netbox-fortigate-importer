@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.4.0 (2026-10-23)
+
+Fixed:
+
+- A configuration whose hostname is a FortiOS default (the model name or
+  code, such as `FortiGate-VM64`, `FGT60F`, `FGVM64`, `FortiWiFi-60F`) or a
+  serial number is no longer matched to a FortiGate by that hostname, even
+  when only one FortiGate has it: many firewalls share these names. The
+  device choice page suggests the matches instead. Own hostnames still
+  match as before.
+
 ## 0.2.0 (2026-10-23)
 
 New:

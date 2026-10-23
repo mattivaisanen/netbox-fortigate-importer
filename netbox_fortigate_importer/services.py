@@ -8,6 +8,7 @@ parsed and dropped. Only the extracted data (no secrets) is saved.
 from __future__ import annotations
 
 import hashlib
+import re
 
 from django.db.models import Q
 from django.views.decorators.debug import sensitive_variables
@@ -50,18 +51,43 @@ def ingest(data: bytes, filename, user, password=None):
 def find_binding(info):
     """
     The FortiGate a configuration belongs to: same serial number, else the
-    only FortiGate with the same hostname (and no other serial number).
-    With none or several, the user chooses on the device choice page.
+    only FortiGate with the same hostname (and no other serial number),
+    unless the hostname is generic (a FortiOS default such as
+    "FortiGate-VM64"). Otherwise the user chooses on the device choice page.
     """
     serial = info.get('serial')
     if serial:
         binding = FortiGateBinding.objects.filter(serial=serial).first()
         if binding:
             return binding
-    if not info.get('hostname'):
+    if not info.get('hostname') or is_generic_hostname(info['hostname'], info):
         return None
     found = list(bindings_by_hostname(info)[:2])
     return found[0] if len(found) == 1 else None
+
+
+#: FortiOS's default hostnames are the model ("FortiGate-VM64", "FGT60F",
+#: "FGVM64", "FortiWiFi-60F"): many firewalls share them.
+_GENERIC_HOSTNAME = re.compile(
+    r'^(?:(?:FortiGate|FortiWiFi)(?:-(?:VM\d*[A-Z0-9]*|\d+[A-Z][A-Z0-9-]*))?'
+    r'|(?:FGT|FG|FWF|FGR)\d+[A-Z][A-Z0-9]*|FGVM\d*[A-Z0-9]*)$',
+    re.IGNORECASE,
+)
+
+
+def is_generic_hostname(hostname, info=None):
+    """
+    True for a hostname that doesn't tell firewalls apart: a FortiOS default
+    (the model name or code) or a serial number. Such names never pick a
+    FortiGate on their own; the device page suggests the matches instead.
+    """
+    from .parser.layout import looks_like_serial
+
+    name = (hostname or '').strip()
+    if not name or _GENERIC_HOSTNAME.match(name) or looks_like_serial(name.upper()):
+        return True
+    info = info or {}
+    return name.lower() in {str(info.get(k) or '').lower() for k in ('model_name', 'model_code')} - {''}
 
 
 def bindings_by_hostname(info):

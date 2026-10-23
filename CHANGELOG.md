@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.0 (2026-10-23)
+
 New:
 
 - Read FortiGate configuration files: plain, gzip-compressed and

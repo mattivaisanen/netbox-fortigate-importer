@@ -317,6 +317,20 @@ class ImportRunPlanView(_RunActionView):
         return redirect(run.get_absolute_url())
 
 
+@register_model_view(ImportRun, 'job_status', path='job-status')
+class ImportRunJobStatusView(_RunActionView):
+    """Whether a job of the run is still queued or running: the run page polls it."""
+
+    def get(self, request, pk):
+        run = self.get_run(request, pk)
+        job = active_job(run)
+        return JsonResponse({
+            'active': job is not None,
+            'status': job.status if job else None,
+            'run_status': run.status,
+        })
+
+
 NO_WORKER = _(
     'No NetBox background worker is running, so the job waits in the queue. Start it '
     '(for netbox-docker: docker compose up -d netbox-worker) and the job runs.'

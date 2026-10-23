@@ -211,3 +211,33 @@ class JobLogTest(ViewBase):
     def test_counts_are_written_out(self):
         self.assertEqual(counts_text({'applied': 3, 'failed': 1, 'skipped': 0}), '3 applied, 1 failed')
         self.assertEqual(counts_text({}), 'nothing to do')
+
+
+class JobProgressTest(ViewBase):
+    def setUp(self):
+        super().setUp()
+        device = Device.objects.create(name='b1', site=self.site, device_type=self.device_type, role=self.role)
+        FortiGateBinding.objects.create(name='Branch', device=device, serial='FGT60FTK21005678')
+        self.upload(read(BRANCH))
+        self.run = ImportRun.objects.get()
+        self.url = reverse(URL + 'importrun_job_status', args=[self.run.pk])
+
+    def test_no_job(self):
+        self.assertEqual(self.client.get(self.url).json()['active'], False)
+        self.assertNotContains(self.client.get(self.run.get_absolute_url()), 'fgi-job')
+
+    def test_running_job_shows_a_loader_that_polls(self):
+        with mock.patch('netbox_fortigate_importer.jobs.workers_running', return_value=True):
+            self.client.post(reverse(URL + 'importrun_dryrun', args=[self.run.pk]))
+        data = self.client.get(self.url).json()
+        self.assertEqual((data['active'], data['status']), (True, 'pending'))
+        page = self.client.get(self.run.get_absolute_url())
+        self.assertContains(page, 'spinner-border')
+        self.assertContains(page, f'data-status-url="{self.url}"')
+        self.assertContains(page, 'This page refreshes when it is done.')
+        self.run.jobs.update(status='completed')
+        self.assertEqual(self.client.get(self.url).json()['active'], False)
+
+    def test_needs_view_permission(self):
+        self.client.logout()
+        self.assertNotEqual(self.client.get(self.url).status_code, 200)

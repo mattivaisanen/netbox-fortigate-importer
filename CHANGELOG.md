@@ -4,6 +4,11 @@
 
 ## 0.6.0 (2026-10-23)
 
+New:
+
+- While a dry run, apply or rollback runs, the import page shows a loader
+  and refreshes by itself when the job is done.
+
 Fixed:
 
 - Importing into a new device whose device type has interfaces no longer

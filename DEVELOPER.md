@@ -265,6 +265,14 @@ Dry-run results live in `ImportRun.dry_run['items']` (by key), not on the
 changes, so the change list reads them through the `dry_run` filter and
 the table's `dry_run` column.
 
+## Job progress
+
+While a job of the run is queued or running, the run page shows a spinner
+and polls `runs/<pk>/job-status/` (JSON: `active`, the job's `status`, the
+run's `run_status`; needs view permission on the run). The poll starts at
+1.5 s and slows to at most 10 s; once no job is active it reloads the page,
+which then shows the results.
+
 ## Job errors
 
 `jobs.enqueue()` turns any failure to queue a job (database, Redis) into

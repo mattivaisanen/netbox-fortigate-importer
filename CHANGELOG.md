@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.2.0 (2026-10-23)
+
 New:
 
 - Approving a change that needs other changes (an IP address needs its

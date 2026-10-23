@@ -1,0 +1,55 @@
+{% extends 'generic/_base.html' %}
+{% load form_helpers %}
+{% load helpers %}
+{% load i18n %}
+
+{% block title %}{% trans "Which device is this?" %}{% endblock %}
+
+{% block content %}
+<div class="row">
+  <div class="col col-12 col-lg-8">
+    <div class="card">
+      <h2 class="card-header">{{ object.info.hostname|default:object.filename }}</h2>
+      <div class="card-body">
+        <p class="text-muted">
+          {% blocktrans with model=object.info.model_name|default:object.info.model_code serial=object.info.serial|default:"?" version=object.info.version %}{{ model }}, serial {{ serial }}, FortiOS {{ version }}.{% endblocktrans %}
+          {% trans "No FortiGate in NetBox matches this configuration yet. Choose the device to import it into, or create one. Later imports of this firewall find it by its serial number." %}
+        </p>
+        {% if candidates %}
+        <p class="mb-1"><strong>{% trans "Possible matches" %}</strong></p>
+        <ul>{% for device in candidates %}<li>{{ device|linkify }} <span class="text-muted small">{{ device.site }} &middot; {{ device.device_type }}{% if device.serial %} &middot; {{ device.serial }}{% endif %}</span></li>{% endfor %}</ul>
+        {% endif %}
+        <form method="post">
+          {% csrf_token %}
+          {% if form.non_field_errors %}<div class="alert alert-danger">{{ form.non_field_errors }}</div>{% endif %}
+          {% render_field form.mode %}
+          <div id="bind-existing">{% render_field form.device %}</div>
+          <div id="bind-new">
+            {% render_field form.name %}
+            {% render_field form.site %}
+            {% render_field form.role %}
+            {% render_field form.device_type %}
+            <p class="text-muted small">{% trans "Nothing is created yet: the new device is one of the changes in the plan, written when you apply it and removed again by a rollback." %}</p>
+          </div>
+          <div class="text-end">
+            <a href="{{ object.get_absolute_url }}" class="btn btn-outline-secondary">{% trans "Cancel" %}</a>
+            <button type="submit" class="btn btn-primary">{% trans "Continue to the plan" %}</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+(function () {
+  function sync() {
+    var mode = document.querySelector('input[name="mode"]:checked');
+    var isNew = mode && mode.value === 'new';
+    document.getElementById('bind-existing').style.display = isNew ? 'none' : '';
+    document.getElementById('bind-new').style.display = isNew ? '' : 'none';
+  }
+  document.querySelectorAll('input[name="mode"]').forEach(function (el) { el.addEventListener('change', sync); });
+  sync();
+})();
+</script>
+{% endblock %}

@@ -13,7 +13,7 @@ class Migration(migrations.Migration):
 
     dependencies = [
         ("contenttypes", "0002_remove_content_type_name"),
-        ("dcim", "0251_fix_ltree_cascade_triggers"),
+        ("dcim", "0250_cooling_infrastructure"),  # oldest supported: NetBox 4.7.0
         ("extras", "0144_customfield_status"),
         ("ipam", "0097_merge_ipaddress_host_index_and_multi_protocol_services"),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),

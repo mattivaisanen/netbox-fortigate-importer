@@ -6,8 +6,33 @@ what would change, try it with a dry run, apply it, and roll it back if
 needed. Later imports of the same firewall are delta syncs: changed and
 deleted objects wait for a person to decide.
 
-> Work in progress. The plan is in the project's planning document; this
-> README grows with each feature.
+> 0.1.0 is the first release. Read its known issues in the
+> [release notes](https://github.com/mattivaisanen/netbox-fortigate-importer/releases/tag/v0.1.0)
+> before you let people import who should not be able to edit everything:
+> applying does not yet check the applying user's NetBox permissions.
+
+## How an import works
+
+1. **Upload** under *FortiGate → New import*: drop the file on the page.
+   An encrypted backup asks for its password.
+2. **Match**: the firewall is found by serial number or hostname. The
+   first time, you choose its NetBox device, or ask for a new one. A new
+   device is not created yet: it is one of the changes in the plan, written
+   on apply and removed again by a rollback.
+3. **Review** the plan: every object that would be created, changed,
+   adopted (an existing NetBox object the importer starts managing) or
+   removed, field by field. New objects start approved; changes, removals
+   and conflicts wait for you. Approve, skip, or keep NetBox's value.
+4. **Dry run** to check that everything would save, then **Apply**. Every
+   apply is one entry in NetBox's change log and can be **rolled back**.
+
+Later imports of the same firewall compare three things: the firewall's
+configuration, NetBox now, and what the last import wrote. A value someone
+edited in NetBox is kept as long as the firewall didn't change it; when
+both changed, it's a conflict for you to decide. An object that is no
+longer on the firewall is offered for deletion (or kept, see settings).
+Before writing, every object is checked again: if someone changed it after
+the plan was made, nothing is applied until you plan again.
 
 ## What it reads
 
@@ -16,6 +41,60 @@ deleted objects wait for a person to decide.
   7.4.4 changed the backup encryption; those files aren't supported yet.
 - Single-VDOM and multi-VDOM configurations, from hardware and VM models,
   FortiOS 5.4 to 7.4.
+
+## What it creates in NetBox
+
+- The device's platform (FortiOS), serial number, primary IP and a
+  `fortigate` key in its config context (firmware, HA, DNS, NTP, SNMP,
+  syslog, FortiAnalyzer/FortiManager).
+- HA clusters as virtual chassis, VDOMs as virtual device contexts, and a
+  VRF per VDOM.
+- Interfaces (physical, aggregate, hard/soft switch, VLAN, tunnel,
+  loopback, VDOM link) with their VLANs, IP addresses and connected
+  prefixes.
+- VRRP groups, DHCP ranges and reservations, BGP AS numbers.
+- IPsec VPNs: IKE and IPsec proposals and policies, profiles, tunnels and
+  terminations. A tunnel between two imported FortiGates is one tunnel
+  with both ends.
+
+With [netbox-security](https://github.com/andy-shady-org/netbox-security)
+installed, also the firewall's rules:
+
+- Addresses (subnets, ranges, FQDNs), address groups, VIPs and VIP groups
+  as addresses and address sets, scoped to the firewall (and VDOM) with
+  netbox-security's identifier, so two FortiGates can both have "all".
+- Custom services and service groups as applications and application sets.
+- Zones, and interfaces that policies name directly, as security zones on
+  their interfaces.
+- Policies as security zone policies, in the firewall's order: one per
+  source and destination interface pair.
+- IP pools as NAT pools, VIPs as destination NAT rules, central SNAT or
+  policy NAT as source NAT rules, on the device (or its VDOM).
+
+With [netbox-routing](https://github.com/DanSheps/netbox-routing)
+installed, also its routing:
+
+- Static routes on the device, in the VDOM's VRF (blackhole and SD-WAN
+  routes too).
+- Prefix lists and access lists (as prefix lists), AS path lists,
+  community lists and route maps, linked to each other as on the firewall.
+  Their names start with the firewall (and VDOM), since netbox-routing
+  names are unique across NetBox.
+- BGP: a router per AS on the device, a scope per VDOM, the neighbors with
+  their route maps and prefix lists, and neighbor groups as peer templates.
+  Neighbor addresses are found in IPAM or created there.
+- OSPF: an instance per VDOM, its areas and the interfaces its networks
+  cover.
+
+BGP network statements, BGP BFD and OSPF costs have no netbox-routing
+field and are listed in the plan's notes. Passwords and keys are never
+imported.
+
+Country, MAC and dynamic addresses, excluded group members, negated
+fields, users and schedules have no netbox-security form: they are left
+out or written into the description, and the plan's notes list them.
+
+Every object it creates gets the tag `fortigate-import`.
 
 ## What it never keeps
 
@@ -50,7 +129,25 @@ PLUGINS = ['netbox_fortigate_importer']
 cd /opt/netbox/netbox && python manage.py migrate
 ```
 
-Settings: [docs/configuration.md](docs/configuration.md).
+Settings and permissions: [docs/configuration.md](docs/configuration.md).
+
+Dry runs, applies and rollbacks run as NetBox background jobs, so NetBox's
+worker (`manage.py rqworker`) must be running.
+
+## REST API
+
+`/api/plugins/fortigate-importer/`: `fortigates/`, `runs/` (with
+`POST runs/upload/` for a multipart file, and `runs/<id>/plan/`,
+`dry-run/`, `apply/`, `rollback/`) and `changes/` (`PATCH` a decision).
+
+## Upgrading
+
+```bash
+pip install --upgrade git+https://github.com/mattivaisanen/netbox-fortigate-importer.git
+cd /opt/netbox/netbox && python manage.py migrate
+```
+
+Then restart NetBox and its worker.
 
 ## License
 

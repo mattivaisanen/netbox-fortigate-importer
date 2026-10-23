@@ -6,7 +6,13 @@ How the importer works and why, for anyone changing it.
 
 1. **Bytes to text** (`parser/files.py`): plain, gzip or encrypted
    (`#FGBK|` header, AES-256-GCM, key = SHA-256 of the password, gzip
-   inside). In memory only. Decompression streams and stops at
+   inside). FortiOS 7.2.9+, 7.4.4+ and 7.6+ changed the key derivation
+   (FG-IR-23-423) and no public source or sample shows the new format, so
+   it is not guessed: `uses_new_encryption()` reads the version and build
+   from the header, and when the old method fails on such a file it raises
+   `UnsupportedEncryption` (the upload form then stops asking for a
+   password). Adding real support needs one encrypted backup from one of
+   those versions plus its password. In memory only. Decompression streams and stops at
    `max_size` (ten times `max_upload_mb`), so a small "zip bomb" can't
    exhaust memory. `services.ingest` is `@sensitive_variables()` and the
    upload views mark `password` sensitive, so Django's error reports never

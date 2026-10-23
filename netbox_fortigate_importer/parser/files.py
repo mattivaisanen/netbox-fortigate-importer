@@ -13,9 +13,15 @@ real FortiOS 7.4 backup:
     rest                                ciphertext
 
 The key is SHA-256 of the password and the plaintext is gzip-compressed
-configuration text. FortiOS 7.4.4 changed the key derivation (the fix for
-CVE-2024-21754); with no sample of the new format, such files fail with a
-clear message instead of a guess.
+configuration text.
+
+FortiOS 7.4.4 and 7.2.9 changed the key derivation (FG-IR-23-423,
+CVE-2024-21754), and 7.6 and later use the new one too. The new format is
+not described anywhere public and we have no sample, so it is not guessed:
+the old method is still tried, and when it fails on a backup whose header
+says it comes from one of those versions, the error says the encryption is
+not supported instead of blaming the password. The header has no patch
+number, only the build, so the version is told apart by build number.
 """
 import hashlib
 import zlib
@@ -26,8 +32,11 @@ ENCRYPTED_MAGIC = b'#FGBK|'
 MAX_TEXT_BYTES = 500 * 1024 * 1024
 GZIP_MAGIC = b'\x1f\x8b'
 
-#: (major, minor, patch) from which encrypted backups use the new format.
-NEW_FORMAT_FROM = (7, 4, 4)
+#: (major, minor) -> first build with the new backup encryption:
+#: 7.2.9 is build 1688, 7.4.4 is build 2662. 6.x and 7.0 never got the fix.
+NEW_FORMAT_BUILDS = {(7, 2): 1688, (7, 4): 2662}
+#: Every release from this (major, minor) on uses the new encryption.
+NEW_FORMAT_FROM = (7, 6)
 
 
 class ConfigFileError(ValueError):
@@ -46,6 +55,10 @@ class DecryptionError(ConfigFileError):
 
 class UnsupportedFormat(ConfigFileError):
     pass
+
+
+class UnsupportedEncryption(UnsupportedFormat):
+    """An encrypted backup from FortiOS 7.2.9+, 7.4.4+ or 7.6+."""
 
 
 def is_encrypted(data):
@@ -77,6 +90,32 @@ def encrypted_header(data):
     return info
 
 
+def uses_new_encryption(header):
+    """
+    True when the header says FortiOS 7.2.9+, 7.4.4+ or 7.6+, False when
+    it says an older release, None when it doesn't say enough to tell.
+    """
+    major, minor = header.get('major'), header.get('minor')
+    if major is None or minor is None:
+        return None
+    if (major, minor) >= NEW_FORMAT_FROM:
+        return True
+    first_build = NEW_FORMAT_BUILDS.get((major, minor))
+    if first_build is None:
+        return False
+    build = header.get('build')
+    if build is None:
+        return None
+    return build >= first_build
+
+
+def _version_label(header):
+    label = f"FortiOS {header['major']}.{header['minor']}"
+    if header.get('build') is not None:
+        label += f" (build {header['build']})"
+    return label
+
+
 def decrypt_backup(data, password, max_size=MAX_TEXT_BYTES):
     """Decrypt an encrypted backup. Returns the decompressed bytes."""
     try:
@@ -97,11 +136,18 @@ def decrypt_backup(data, password, max_size=MAX_TEXT_BYTES):
         plain = AESGCM(key).decrypt(nonce, ciphertext + tag, None)
     except InvalidTag:
         header = encrypted_header(data)
-        version = (header.get('major', 0), header.get('minor', 0))
+        new = uses_new_encryption(header)
+        if new:
+            raise UnsupportedEncryption(
+                f'This backup was saved by {_version_label(header)}. FortiOS 7.2.9, 7.4.4 and later '
+                'encrypt backups in a way the importer can\'t read yet, so the password can\'t be '
+                'checked either. Back up the configuration again without a password and upload '
+                'that file; the importer drops passwords and keys from it.'
+            ) from None
         hint = ''
-        if version >= NEW_FORMAT_FROM[:2]:
+        if new is None:
             hint = (
-                ' If the password is right, the backup may come from FortiOS 7.4.4 or later, '
+                ' If the password is right, the backup may come from FortiOS 7.2.9, 7.4.4 or later, '
                 'whose encryption is not supported yet.'
             )
         raise DecryptionError(f'Wrong password, or the file is damaged.{hint}') from None

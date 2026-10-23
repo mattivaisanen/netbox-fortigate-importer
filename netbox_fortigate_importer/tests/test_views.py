@@ -168,6 +168,15 @@ class ViewTest(ViewBase):
         self.assertEqual(response.status_code, 200, response.content)
         self.assertTrue(ImportRun.objects.get().encrypted)
 
+    def test_new_encryption_does_not_ask_again(self):
+        # FortiOS 7.4.4 (build 2662) and later: another password won't help.
+        content = encrypt_backup(BRANCH.read_text(), 'secret!', minor=4, build=2662)
+        response = self.upload(content, password='wrong')
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(response.json()['password_required'])
+        self.assertIn('without a password', response.json()['error'])
+        self.assertFalse(ImportRun.objects.exists())
+
     def test_upload_never_touches_the_disk(self):
         with mock.patch('django.core.files.uploadhandler.TemporaryFileUploadHandler.new_file') as temp:
             with self.settings(FILE_UPLOAD_MAX_MEMORY_SIZE=10):

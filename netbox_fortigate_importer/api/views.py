@@ -126,7 +126,10 @@ class ImportRunViewSet(NetBoxReadOnlyModelViewSet):
             raise ValidationError({'detail': 'This run already has a job queued or running.'})
         if not allowed(run):
             raise ValidationError({'detail': f'Not possible while the run is "{run.get_status_display()}".'})
-        job = jobs.enqueue(run, request.user, name)
+        try:
+            job = jobs.enqueue(run, request.user, name)
+        except jobs.QueueError as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
         return Response({'job': job.pk, 'job_url': job.get_absolute_url()}, status=status.HTTP_202_ACCEPTED)
 
     @action(detail=True, methods=['post'], url_path='dry-run', permission_classes=[RunActionPermissions])

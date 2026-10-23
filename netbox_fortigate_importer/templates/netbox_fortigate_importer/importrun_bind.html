@@ -22,7 +22,18 @@
         <form method="post">
           {% csrf_token %}
           {% if form.non_field_errors %}<div class="alert alert-danger">{{ form.non_field_errors }}</div>{% endif %}
-          {% render_field form.mode %}
+          <div class="row mb-3">
+            <label class="col-sm-3 col-form-label text-lg-end required">{{ form.mode.label }}</label>
+            <div class="col">
+              {% for choice in form.mode %}
+                <div class="form-check form-check-inline mt-2">
+                  <input class="form-check-input" type="radio" name="{{ form.mode.html_name }}" id="{{ choice.id_for_label }}" value="{{ choice.data.value }}"{% if choice.data.selected %} checked{% endif %}>
+                  <label class="form-check-label" for="{{ choice.id_for_label }}">{{ choice.choice_label }}</label>
+                </div>
+              {% endfor %}
+              {% if form.mode.errors %}<div class="form-text text-danger">{{ form.mode.errors|join:" " }}</div>{% endif %}
+            </div>
+          </div>
           <div id="bind-existing">{% render_field form.device %}</div>
           <div id="bind-new">
             {% render_field form.name %}

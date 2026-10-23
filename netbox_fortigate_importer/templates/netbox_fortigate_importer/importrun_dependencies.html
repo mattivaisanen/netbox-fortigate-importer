@@ -1,0 +1,49 @@
+{% extends 'generic/_base.html' %}
+{% load helpers %}
+{% load i18n %}
+
+{% block title %}{% trans "Approve what these changes need?" %}{% endblock %}
+
+{% block content %}
+<div class="row">
+  <div class="col col-12 col-lg-8">
+    <div class="card">
+      <h2 class="card-header">
+        {% blocktrans count n=missing|length %}{{ n }} more change is needed{% plural %}{{ n }} more changes are needed{% endblocktrans %}
+      </h2>
+      <div class="card-body">
+        <p>
+          {% blocktrans count n=selected|length %}The change you approve needs objects that are not approved yet. Without them it is skipped when the import is applied.{% plural %}The {{ n }} changes you approve need objects that are not approved yet. Without them they are skipped when the import is applied.{% endblocktrans %}
+        </p>
+        <p class="mb-1"><strong>{% trans "You approve" %}</strong></p>
+        <ul class="small">
+          {% for row in selected|slice:":10" %}<li><a href="{{ row.get_absolute_url }}">{{ row.label }}</a></li>{% endfor %}
+          {% if selected|length > 10 %}<li class="text-muted">{% blocktrans with n=selected|length|add:"-10" %}and {{ n }} more{% endblocktrans %}</li>{% endif %}
+        </ul>
+        <p class="mb-1"><strong>{% trans "They need" %}</strong></p>
+        <ul class="small">
+          {% for row in missing %}
+            <li>
+              <a href="{{ row.get_absolute_url }}">{{ row.label }}</a>
+              {% badge row.get_action_display bg_color=row.get_action_color %}
+              {% badge row.get_decision_display bg_color=row.get_decision_color %}
+            </li>
+          {% endfor %}
+        </ul>
+        <form method="post" action="{% url 'plugins:netbox_fortigate_importer:importrun_decide' pk=object.pk %}" class="d-flex flex-wrap gap-2 justify-content-end">
+          {% csrf_token %}
+          {% for pk in selected_pks %}<input type="hidden" name="pk" value="{{ pk }}">{% endfor %}
+          <input type="hidden" name="decision" value="approved">
+          <input type="hidden" name="scope" value="selected">
+          <input type="hidden" name="return_url" value="{{ return_url }}">
+          <a href="{{ return_url }}" class="btn btn-outline-secondary">{% trans "Cancel" %}</a>
+          <button type="submit" name="dependencies" value="only" class="btn btn-outline-success">{% trans "Approve only my selection" %}</button>
+          <button type="submit" name="dependencies" value="include" class="btn btn-success">
+            <i class="mdi mdi-check-all"></i> {% blocktrans count n=missing|length %}Approve it too{% plural %}Approve all {{ n }} too{% endblocktrans %}
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

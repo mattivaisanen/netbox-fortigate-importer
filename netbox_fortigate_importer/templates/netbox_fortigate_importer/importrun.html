@@ -62,6 +62,7 @@
   {% blocktrans with status=active_job.get_status_display %}A job for this import is {{ status }}.{% endblocktrans %}
   <a href="{{ active_job.get_absolute_url }}">{% trans "Follow it" %}</a> {% trans "or reload this page." %}
 </div>
+{% if no_worker %}<div class="alert alert-danger" role="alert"><i class="mdi mdi-alert"></i> {{ no_worker }}</div>{% endif %}
 {% endif %}
 {% if object.error %}
 <div class="alert alert-danger" role="alert"><i class="mdi mdi-alert"></i> {{ object.error }}</div>
@@ -87,6 +88,19 @@
         <tr><th scope="row">{% trans "Firmware" %}</th><td>{{ object.info.version|placeholder }}{% if object.info.build %} <span class="text-muted">build {{ object.info.build }}</span>{% endif %}</td></tr>
         <tr><th scope="row">{% trans "VDOMs" %}</th><td>{% if object.info.multi_vdom %}{% for name in object.data.vdoms %}<span class="badge text-bg-secondary">{{ name }}</span> {% endfor %}{% else %}{% trans "Single VDOM" %}{% endif %}</td></tr>
         <tr><th scope="row">{% trans "Lines read" %}</th><td>{{ summary.stats.lines|default:object.data.stats.lines|placeholder }}</td></tr>
+        {% with skipped=object.data.stats.not_imported %}{% if skipped %}
+        <tr>
+          <th scope="row">{% trans "Not imported" %}</th>
+          <td>
+            <details>
+              <summary class="text-muted">{% blocktrans count n=skipped|length %}{{ n }} configuration section the importer does not read{% plural %}{{ n }} configuration sections the importer does not read{% endblocktrans %}</summary>
+              <div class="small mt-1 overflow-auto" style="max-height: 12rem;">
+                {% for name in skipped %}<code class="d-inline-block me-2">{{ name }}</code>{% endfor %}
+              </div>
+            </details>
+          </td>
+        </tr>
+        {% endif %}{% endwith %}
         <tr><th scope="row">{% trans "Secrets removed" %}</th><td>{{ object.data.stats.secrets_removed|default:0 }} <span class="text-muted small">{% trans "never stored" %}</span></td></tr>
         <tr><th scope="row">{% trans "SHA-256" %}</th><td class="font-monospace small text-break">{{ object.file_sha256|placeholder }}</td></tr>
       </table>
@@ -95,14 +109,6 @@
         {% trans "The file itself was not saved. Only the data above and the extracted objects are kept." %}
       </div>
     </div>
-    {% if object.data.stats.not_imported %}
-    <div class="card">
-      <h2 class="card-header">{% trans "Not imported" %}</h2>
-      <div class="card-body small">
-        {% for name in object.data.stats.not_imported %}<code class="me-2">{{ name }}</code>{% endfor %}
-      </div>
-    </div>
-    {% endif %}
   </div>
   <div class="col col-12 col-xl-7">
     <div class="card">
@@ -129,7 +135,7 @@
             <span class="text-muted small">
               {% for outcome, count in dry_run.counts.items %}{{ outcome|default:"—" }}: {{ count }}{% if not forloop.last %}, {% endif %}{% endfor %}
             </span>
-            {% if dry_run.failed %}<a href="?outcome=" class="small">{% trans "See failing items below" %}</a>{% endif %}
+            {% if dry_run.failed %}<a href="?dry_run=failed#changes" class="small">{% trans "Show the failing changes" %}</a>{% endif %}
           </div>
         {% endif %}
         {% if object.applied %}
@@ -163,7 +169,11 @@
       <a href="?decision=pending" class="btn btn-outline-secondary{% if request.GET.decision == 'pending' %} active{% endif %}">{% trans "Needs review" %}</a>
       <a href="?action=conflict" class="btn btn-outline-secondary{% if request.GET.action == 'conflict' %} active{% endif %}">{% trans "Conflicts" %}</a>
       <a href="?action=delete&action=deprecate" class="btn btn-outline-secondary">{% trans "Removals" %}</a>
-      <a href="?outcome=failed" class="btn btn-outline-secondary{% if request.GET.outcome == 'failed' %} active{% endif %}">{% trans "Failed" %}</a>
+      {% if object.applied or not dry_run.items %}
+      <a href="?outcome=failed#changes" class="btn btn-outline-secondary{% if request.GET.outcome == 'failed' %} active{% endif %}">{% trans "Failed" %}</a>
+      {% else %}
+      <a href="?dry_run=failed#changes" class="btn btn-outline-secondary{% if request.GET.dry_run == 'failed' %} active{% endif %}" title="{% trans 'Changes that failed in the last dry run' %}">{% trans "Failed in dry run" %}</a>
+      {% endif %}
       <a href="?changed=0" class="btn btn-outline-secondary{% if request.GET.changed == '0' %} active{% endif %}">{% trans "All, with unchanged" %}</a>
     </span>
     <form method="get" class="d-flex gap-1">

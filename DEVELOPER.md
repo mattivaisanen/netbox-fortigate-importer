@@ -216,6 +216,30 @@ rollback) and unlinks the device in `detach_device()` before deleting it;
 approval plugin the device may be created later than the apply:
 `planner.attach_created_device()` links it on the next plan.
 
+## Reviewing with dependencies
+
+Every planned change stores the keys it refers to (`depends_on`, from the
+`Ref`s in its desired values). `dependencies.py` follows them: approving a
+change whose prerequisites are creates that stay unapproved shows
+`importrun_dependencies.html` ("approve them too" or "only my selection"),
+and skipping one warns about approved changes that need it. A prerequisite
+that already exists in NetBox (adopt, update, conflict, no change) needs no
+approval: the applier resolves it by its pk. When an item is skipped at
+apply time because a prerequisite is missing, `Applier.unresolved_text`
+names that change and why it was not written.
+
+Dry-run results live in `ImportRun.dry_run['items']` (by key), not on the
+changes, so the change list reads them through the `dry_run` filter and
+the table's `dry_run` column.
+
+## Job errors
+
+`jobs.enqueue()` turns any failure to queue a job (database, Redis) into
+`QueueError`, shown as a message (503 in the API). `jobs.workers_running()`
+asks Redis whether an RQ worker runs, so the run page can warn while a job
+waits for a worker that isn't there. A job that raises writes
+"<Action> did not run: <error>" to `ImportRun.error`.
+
 ## Uploads
 
 `views.InMemoryUploadHandler` replaces Django's upload handlers for the
@@ -252,6 +276,7 @@ the user, so change-approval decides like for any edit:
 `tests/test_parser.py` (no database), `tests/test_apply.py` (plan, apply,
 delta, conflicts, drift, rollback, two firewalls), `tests/test_views.py`
 (upload, password prompt, memory-only upload, review, API, jobs),
-`tests/test_safety.py` (permissions, cascades, locking, matching) and
+`tests/test_safety.py` (permissions, cascades, locking, matching),
+`tests/test_review.py` (dependency prompts, dry-run results, job errors) and
 `tests/test_change_approval.py`, `tests/test_security.py` and
 `tests/test_routing.py` (skipped unless the plugin is installed).

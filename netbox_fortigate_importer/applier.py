@@ -434,7 +434,7 @@ class Applier:
         except Unresolved as exc:
             transaction.savepoint_rollback(sid)
             self._restore(queue, before)
-            self.record(row, OutcomeChoices.SKIPPED, f'needs "{exc}", which was not applied')
+            self.record(row, OutcomeChoices.SKIPPED, self.unresolved_text(str(exc)))
             return OutcomeChoices.SKIPPED
         except Exception as exc:  # noqa: BLE001 - every failure is reported on its item
             transaction.savepoint_rollback(sid)
@@ -459,6 +459,24 @@ class Applier:
         self.record(row, outcome)
         self.results[row.key]['change_request'] = change_request_id
         return outcome
+
+    def unresolved_text(self, key):
+        """Why an item could not be written: the change it needs, by name, and what became of it."""
+        needed = next((r for r in self.rows if r.key == key), None)
+        if needed is None:
+            return f'needs "{key}", which is not in this plan'
+        result = self.results.get(key, {})
+        if needed.decision == DecisionChoices.PENDING:
+            why = 'it is not reviewed yet: approve it too'
+        elif needed.decision == DecisionChoices.SKIPPED:
+            why = 'it is skipped: approve it too'
+        elif result.get('outcome') == OutcomeChoices.FAILED:
+            why = f'it failed: {result.get("error")}'
+        elif result.get('outcome') == OutcomeChoices.SKIPPED:
+            why = 'it was skipped'
+        else:
+            why = 'it was not written'
+        return f'needs "{needed.label}", but {why}'
 
     @staticmethod
     def _copy_queue(queue):

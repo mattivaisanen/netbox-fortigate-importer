@@ -17,7 +17,7 @@ from utilities.forms import restrict_form_fields
 from utilities.request import safe_for_redirect
 from utilities.views import ConditionalLoginRequiredMixin, register_model_view
 
-from . import filtersets, forms, planner, services, tables
+from . import dependencies, filtersets, forms, planner, services, tables
 from . import jobs
 from .jobs import active_job
 from .mappers import MapperError
@@ -204,20 +204,24 @@ class ImportRunView(generic.ObjectView):
         queryset = filterset.qs if filterset.is_valid() else changes
         if 'changed' not in request.GET:
             queryset = queryset.exclude(action=ActionChoices.NOOP)
+        job = active_job(instance)
         can_decide = instance.status == RunStatusChoices.PLANNED and \
             request.user.has_perm('netbox_fortigate_importer.change_plannedchange')
-        table = tables.PlannedChangeTable(queryset)
+        table = tables.PlannedChangeTable(queryset, dry_run=instance.dry_run)
         if can_decide:
             # Checkboxes, so single changes can be approved or skipped.
             table.columns.show('pk')
         table.configure(request)
+        if not (instance.dry_run or {}).get('items'):
+            table.columns.hide('dry_run')
         summary = instance.summary or {}
         return {
             'changes_table': table,
             'summary': summary,
             'action_counts': [(value, label, color, summary.get('actions', {}).get(value, 0))
                               for value, label, color in ActionChoices.CHOICES],
-            'active_job': active_job(instance),
+            'active_job': job,
+            'no_worker': NO_WORKER if job and job.status == 'pending' and jobs.workers_running() is False else '',
             'can_apply': instance.can_apply and request.user.has_perm('netbox_fortigate_importer.apply_importrun'),
             'can_rollback': instance.can_rollback and
             request.user.has_perm('netbox_fortigate_importer.rollback_importrun'),
@@ -310,6 +314,12 @@ class ImportRunPlanView(_RunActionView):
         return redirect(run.get_absolute_url())
 
 
+NO_WORKER = _(
+    'No NetBox background worker is running, so the job waits in the queue. Start it '
+    '(for netbox-docker: docker compose up -d netbox-worker) and the job runs.'
+)
+
+
 class _JobView(_RunActionView):
     action = None
     message = ''
@@ -325,8 +335,14 @@ class _JobView(_RunActionView):
             messages.error(request, _('Not possible while the run is "{status}".').format(
                 status=run.get_status_display()))
         else:
-            jobs.enqueue(run, request.user, self.action)
-            messages.info(request, self.message)
+            try:
+                jobs.enqueue(run, request.user, self.action)
+            except jobs.QueueError as exc:
+                messages.error(request, str(exc))
+            else:
+                messages.info(request, self.message)
+                if jobs.workers_running() is False:
+                    messages.warning(request, NO_WORKER)
         return redirect(run.get_absolute_url())
 
 
@@ -399,6 +415,23 @@ class ImportRunDecideView(_RunActionView):
             changes = changes.filter(pk__in=request.POST.getlist('pk'))
         if decision == DecisionChoices.KEEP_NETBOX:
             changes = changes.filter(action=ActionChoices.CONFLICT)
+        return_url = request.POST.get('return_url')
+        if not return_url or not safe_for_redirect(return_url):
+            return_url = run.get_absolute_url()
+        selected = list(changes.values_list('pk', flat=True))
+        if decision == DecisionChoices.APPROVED:
+            # Approving a change whose prerequisites stay unapproved would
+            # only get it skipped at apply time: ask first.
+            missing = dependencies.missing_for(run, selected)
+            choice = request.POST.get('dependencies')
+            if missing and choice not in ('include', 'only'):
+                return render(request, 'netbox_fortigate_importer/importrun_dependencies.html', {
+                    'object': run, 'selected': run.changes.filter(pk__in=selected), 'missing': missing,
+                    'selected_pks': selected, 'return_url': return_url,
+                })
+            if missing and choice == 'include':
+                selected += [row.pk for row in missing]
+                changes = run.changes.filter(pk__in=selected)
         with transaction.atomic():
             # Waits for an apply that holds the run, then sees its job.
             locked = ImportRun.objects.select_for_update().get(pk=run.pk)
@@ -411,9 +444,13 @@ class ImportRunDecideView(_RunActionView):
                 ImportRun.objects.filter(pk=run.pk).update(dry_run={})
         messages.success(request, _('{count} changes set to "{decision}".').format(
             count=count, decision=labels[decision]))
-        return_url = request.POST.get('return_url')
-        if not return_url or not safe_for_redirect(return_url):
-            return_url = run.get_absolute_url()
+        if decision in (DecisionChoices.SKIPPED, DecisionChoices.PENDING):
+            affected = dependencies.dependents_of(run, selected)
+            if affected:
+                names = ', '.join(row.label for row in affected[:5]) + (' …' if len(affected) > 5 else '')
+                messages.warning(request, _(
+                    '{count} approved changes need these and will be skipped too unless you approve them '
+                    'again: {names}').format(count=len(affected), names=names))
         return redirect(return_url)
 
 
@@ -434,8 +471,15 @@ class PlannedChangeView(generic.ObjectView):
             'decisions': [(v, l) for v, l, *_ in DecisionChoices.CHOICES
                           if v != DecisionChoices.KEEP_NETBOX or instance.action == ActionChoices.CONFLICT],
             'dry_run': (instance.run.dry_run or {}).get('items', {}).get(instance.key),
+            'needs': self.needs(instance),
             'change_request_url': change_request_url(instance.change_request_id),
         }
+
+    @staticmethod
+    def needs(instance):
+        keys = instance.depends_on or []
+        rows = {row.key: row for row in instance.run.changes.filter(key__in=keys)}
+        return [(key, rows.get(key)) for key in keys]
 
 
 def change_request_url(pk):

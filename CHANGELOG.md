@@ -2,7 +2,29 @@
 
 ## Unreleased
 
+New:
+
+- Approving a change that needs other changes (an IP address needs its
+  interface, a route its VRF) asks whether to approve those too. Skipping a
+  change warns about approved changes that need it. A change's page lists
+  what it needs by name, with their decisions.
+- A skipped item says which change it needed and why that one was not
+  written ("not reviewed yet", "skipped", or its error).
+- The last dry run's result shows on every change, and "Failed in dry run"
+  lists the changes that would fail.
+- The plan notes interfaces the device has but the configuration doesn't,
+  for example from a device type that names its ports differently.
+
 Fixed:
+
+- "See failing items" after a dry run showed every change instead of the
+  failing ones.
+- When NetBox cannot queue a dry run, apply or rollback (database or Redis
+  trouble), the page says so instead of showing a server error, and it
+  warns when no background worker is running to start the job. A job that
+  crashes leaves its error on the import's page.
+- The "Not imported" list is folded into one line of the configuration box.
+- The new or existing device choice shows proper radio buttons.
 
 - Scripts stored in a configuration (`system auto-script`, automation
   actions) are kept as text. Before, their lines were read as configuration,

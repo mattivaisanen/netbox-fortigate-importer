@@ -97,11 +97,21 @@
         {% endif %}
       </table>
     </div>
-    {% if object.depends_on %}
+    {% if needs %}
     <div class="card">
       <h2 class="card-header">{% trans "Needs" %}</h2>
-      <ul class="list-group list-group-flush small font-monospace">
-        {% for key in object.depends_on %}<li class="list-group-item">{{ key }}</li>{% endfor %}
+      <ul class="list-group list-group-flush small">
+        {% for key, row in needs %}
+          <li class="list-group-item">
+            {% if row %}
+              <a href="{{ row.get_absolute_url }}">{{ row.label }}</a>
+              {% badge row.get_action_display bg_color=row.get_action_color %}
+              {% if row.writes %}{% badge row.get_decision_display bg_color=row.get_decision_color %}{% endif %}
+            {% else %}
+              <span class="font-monospace">{{ key }}</span> <span class="text-muted">{% trans "already in NetBox" %}</span>
+            {% endif %}
+          </li>
+        {% endfor %}
       </ul>
     </div>
     {% endif %}

@@ -1,5 +1,6 @@
 """Planning, applying, dry runs and rollback against a real NetBox database."""
 import copy
+import uuid
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
@@ -58,6 +59,17 @@ class ImportTestCase(TestCase):
         results = applier.apply(run, self.user, dry_run=dry_run)
         run.refresh_from_db()
         return results
+
+    def edit_in_netbox(self, obj, **values):
+        """Change an object the way a person does: signed in, with a change log entry."""
+        from utilities.request import apply_request_processors
+
+        with apply_request_processors(applier.fake_request(self.user, uuid.uuid4())):
+            obj.snapshot()
+            for name, value in values.items():
+                setattr(obj, name, value)
+            obj.full_clean()
+            obj.save()
 
     def approve_all(self, run):
         run.changes.filter(decision=DecisionChoices.PENDING).update(decision=DecisionChoices.APPROVED)
@@ -179,8 +191,7 @@ class DeltaTest(ImportTestCase):
     def test_netbox_edit_is_kept_when_firewall_unchanged(self):
         binding, _ = self.first_import()
         wan1 = Interface.objects.get(device=binding.device, name='wan1')
-        wan1.description = 'Edited in NetBox'
-        wan1.save()
+        self.edit_in_netbox(wan1, description='Edited in NetBox')
         run = self.plan(binding, data_of(HQ))
         change = run.changes.get(key='interface/wan1')
         self.assertEqual(change.action, ActionChoices.NOOP)
@@ -192,8 +203,7 @@ class DeltaTest(ImportTestCase):
     def test_both_changed_is_a_conflict(self):
         binding, _ = self.first_import()
         wan1 = Interface.objects.get(device=binding.device, name='wan1')
-        wan1.description = 'Edited in NetBox'
-        wan1.save()
+        self.edit_in_netbox(wan1, description='Edited in NetBox')
         data = data_of(HQ)
         interface(data, 'wan1')['description'] = 'Changed on the firewall'
         interface(data, 'wan1')['mtu'] = 1492
@@ -283,8 +293,7 @@ class SafetyTest(ImportTestCase):
         run = self.plan(binding, data)
         self.approve_all(run)
         wan1 = Interface.objects.get(device=binding.device, name='wan1')
-        wan1.description = 'Someone was faster'
-        wan1.save()
+        self.edit_in_netbox(wan1, description='Someone was faster')
         self.apply(run)
         self.assertEqual(run.status, RunStatusChoices.PLANNED)
         self.assertIn('Nothing was applied', run.error)
@@ -347,14 +356,9 @@ class RollbackTest(ImportTestCase):
         self.assertEqual(set(self.plan(binding, data_of(HQ)).summary['actions']), {'noop'})
 
     def test_rollback_refuses_to_overwrite_later_edits(self):
-        from utilities.request import apply_request_processors
-
         binding, run = self.first_import()
         wan1 = Interface.objects.get(device=binding.device, name='wan1')
-        with apply_request_processors(applier.fake_request(self.user, __import__('uuid').uuid4())):
-            wan1.snapshot()
-            wan1.description = 'Later edit'
-            wan1.save()
+        self.edit_in_netbox(wan1, description='Later edit')
         with self.assertRaises(rollback.RollbackError):
             rollback.rollback(run, self.user)
         self.assertTrue(IPAddress.objects.exists())

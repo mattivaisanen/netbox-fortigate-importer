@@ -27,7 +27,7 @@ def collect(ctx):
     if integrations.has_routing():
         from .routing import RoutingMapper
 
-        desired += RoutingMapper(ctx).run()
+        desired += RoutingMapper(ctx, desired).run()
 
     keys = {}
     for item in desired:

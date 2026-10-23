@@ -134,8 +134,13 @@ class FortiGateBinding(JournalingMixin, TagsMixin, ChangeLoggedModel):
     name = models.CharField(verbose_name=_('name'), max_length=100, unique=True)
     device = models.ForeignKey(
         to='dcim.Device', on_delete=models.PROTECT, related_name='fortigate_bindings',
-        verbose_name=_('device'),
+        null=True, blank=True, verbose_name=_('device'),
+        help_text=_('Empty until the first apply creates the new device.'),
     )
+    #: For a firewall that is not in NetBox yet: how to create its device
+    #: ({'name', 'site', 'role', 'device_type'}, pks). The device is a planned
+    #: change like any other, written only when an import is applied.
+    new_device = models.JSONField(verbose_name=_('new device'), default=dict, blank=True)
     virtual_chassis = models.ForeignKey(
         to='dcim.VirtualChassis', on_delete=models.SET_NULL, null=True, blank=True,
         related_name='fortigate_bindings', verbose_name=_('virtual chassis'),
@@ -166,6 +171,11 @@ class FortiGateBinding(JournalingMixin, TagsMixin, ChangeLoggedModel):
 
     def get_absolute_url(self):
         return reverse('plugins:netbox_fortigate_importer:fortigatebinding', args=[self.pk])
+
+    def clean(self):
+        super().clean()
+        if self.device_id is None and not self.new_device:
+            raise ValidationError({'device': _('Choose the device.')})
 
     def option(self, key):
         """A per-firewall option, falling back to the plugin setting."""

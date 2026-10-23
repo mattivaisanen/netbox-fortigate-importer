@@ -29,7 +29,7 @@ DELETE_ACTIONS = (
 
 
 class FortiGateBindingForm(NetBoxModelForm):
-    device = DynamicModelChoiceField(label=_('Device'), queryset=Device.objects.all())
+    device = DynamicModelChoiceField(label=_('Device'), queryset=Device.objects.all(), required=False)
     virtual_chassis = DynamicModelChoiceField(
         label=_('Virtual chassis'), queryset=VirtualChassis.objects.all(), required=False,
     )

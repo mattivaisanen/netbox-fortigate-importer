@@ -213,7 +213,20 @@ class Applier:
             self.keys[row.key] = obj.pk
             if self.tag is not None and hasattr(obj, 'tags'):
                 obj.tags.add(self.tag)
+            if row.key == 'device':
+                self.attach_device(obj)
         return obj
+
+    def attach_device(self, device):
+        """Link the FortiGate to the device this apply created."""
+        from .models import FortiGateBinding
+
+        # A fresh copy: a dry run (or a failed item) rolls this back in the
+        # database, and the run's own binding must not keep the device.
+        binding = FortiGateBinding.objects.get(pk=self.binding.pk)
+        binding.snapshot()
+        binding.device = device
+        self.save(binding)
 
     def remove(self, row):
         model = row.object_type.model_class()

@@ -23,7 +23,7 @@ from django.utils import timezone
 
 from . import integrations
 from .applier import error_text, fake_request
-from .models import ManagedObject, OutcomeChoices, PlannedChange, RunStatusChoices
+from .models import FortiGateBinding, ManagedObject, OutcomeChoices, PlannedChange, RunStatusChoices
 
 
 class RollbackError(Exception):
@@ -37,8 +37,11 @@ def _changes(run):
 
     # The import tag stays: other imports' objects may carry it. Change
     # requests the import queued are withdrawn, not deleted.
+    # The FortiGate itself is the importer's record, not imported data: a
+    # device the import created is unlinked from it in detach_device().
     return list(ObjectChange.objects.filter(request_id=run.apply_request_id)
                 .exclude(changed_object_type=ContentType.objects.get_for_model(Tag))
+                .exclude(changed_object_type=ContentType.objects.get_for_model(FortiGateBinding))
                 .exclude(changed_object_type__app_label=integrations.CHANGE_APPROVAL)
                 .select_related('changed_object_type').order_by('-time', '-pk'))
 
@@ -116,6 +119,7 @@ def rollback(run, user):
     with apply_request_processors(request):
         with transaction.atomic():
             withdraw_requests(run, user)
+            detach_device(run, changes)
             for change in changes:
                 try:
                     _undo(change)
@@ -129,6 +133,28 @@ def rollback(run, user):
             run.rollback_request_id = request_id
             run.save()
     return len(changes)
+
+
+def detach_device(run, changes):
+    """
+    When the import created the FortiGate's device, unlink it before it is
+    deleted. The FortiGate keeps how to create it, for the next apply.
+    """
+    from core.choices import ObjectChangeActionChoices as Action
+    from dcim.models import Device
+    from django.contrib.contenttypes.models import ContentType
+
+    binding = FortiGateBinding.objects.filter(pk=run.binding_id).first()
+    if binding is None or binding.device_id is None:
+        return
+    device_type = ContentType.objects.get_for_model(Device)
+    created = any(c.action == Action.ACTION_CREATE and c.changed_object_type_id == device_type.pk and
+                  c.changed_object_id == binding.device_id for c in changes)
+    if created:
+        binding.snapshot()
+        binding.device = None
+        binding.virtual_chassis = None
+        binding.save()
 
 
 def restore_records(run):

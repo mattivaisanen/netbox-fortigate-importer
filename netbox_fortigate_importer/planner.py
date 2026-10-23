@@ -30,7 +30,7 @@ from django.utils import timezone
 
 from .jobs import busy
 from .mappers import Context, collect
-from .mappers.base import Ref, model_field, model_label, normalize, read_field, read_m2m, snapshot, sort_values
+from .mappers.base import Ref, escape_literals, model_field, model_label, normalize, read_field, read_m2m, snapshot, sort_values
 from .models import ActionChoices, DecisionChoices, ImportRun, ManagedObject, PlannedChange, RunStatusChoices
 
 #: Key in ManagedObject.fields holding the importer's notes about the object.
@@ -115,10 +115,10 @@ class Planner:
         raw, resolved = {}, {}
         for name, value in list(desired.fields.items()) + list(desired.deferred.items()):
             value = coerce(desired.model, name, value)
-            raw[name] = normalize(value)
+            raw[name] = normalize(escape_literals(value))
             resolved[name] = self.resolve(value)
         for name, values in desired.m2m.items():
-            raw[name] = sort_values(normalize(v) for v in values)
+            raw[name] = sort_values(normalize(escape_literals(v)) for v in values)
             resolved[name] = sort_values(self.resolve(v) for v in values)
         return raw, resolved
 
@@ -169,6 +169,25 @@ class Planner:
             return obj, 'adopt', note
         return None, 'new', ''
 
+    def assigned_elsewhere(self, obj):
+        """
+        The other device (or VM) an object such as an IP address is assigned
+        to, or ''. Branches reuse the same subnets: one firewall must not
+        take over another one's addresses.
+        """
+        assigned = getattr(obj, 'assigned_object', None)
+        if assigned is None:
+            return ''
+        device_id = getattr(assigned, 'device_id', None)
+        if device_id is not None:
+            if device_id == self.binding.device_id:
+                return ''
+            return str(getattr(assigned, 'device', '') or 'another device')
+        machine = getattr(assigned, 'virtual_machine', None)
+        if machine is not None:
+            return str(machine)
+        return ''
+
     def other_managers(self, obj):
         ct = ContentType.objects.get_for_model(obj)
         return list(
@@ -193,17 +212,39 @@ class Planner:
             row = self.plan_one(desired, order, *located)
             if row is not None:
                 rows.append(row)
+        held = Counter()
+        truncated = self.truncated()
+        vdoms = set((self.run.data or {}).get('vdoms') or {})
         for key, managed in sorted(self.managed.items()):
             if key in wanted_keys:
                 continue
+            vdom = ((managed.fields or {}).get(META) or {}).get('vdom') or ''
+            if truncated:
+                held['the configuration looks truncated'] += 1
+                continue
+            if vdom and vdoms and vdom not in vdoms:
+                held[f'VDOM {vdom} is not in this configuration'] += 1
+                continue
             order += 1
             rows.append(self.plan_removal(managed, order))
+        for reason, count in sorted(held.items()):
+            self.notes.append(f'{reason}: {count} objects missing from it are left alone, not removed. '
+                              'Import a complete configuration to remove them.')
         return rows
+
+    def truncated(self):
+        """The parser said the file ends early: what is missing may just be cut off."""
+        return any('may be truncated' in w for w in (self.run.data or {}).get('warnings', []))
 
     def find_one(self, desired):
         """(object, how, notes) for one desired object; records its pk."""
         obj, how, note = self.find(desired, self.managed.get(desired.key))
         notes = [n for n in (desired.note, note) if n]
+        if obj is not None and how == 'adopt' and not (desired.shared or desired.release_only):
+            owner = self.assigned_elsewhere(obj)
+            if owner:
+                notes.append(f'NetBox has it on {owner}, another device; not taken over, a new one is created')
+                obj, how = None, 'new'
         if obj is not None:
             claim = (model_label(desired.model), obj.pk)
             if claim in self.claimed and not desired.partial:
@@ -227,9 +268,9 @@ class Planner:
             for name, value in (desired.lookup or {}).items():
                 # Many-to-many lookups only find; the m2m values set them.
                 if '__' not in name and not model_field(desired.model, name).many_to_many:
-                    create[name] = normalize(value)
+                    create[name] = normalize(escape_literals(value))
             for name, value in desired.create_defaults.items():
-                create[name] = normalize(value)
+                create[name] = normalize(escape_literals(value))
 
         current = snapshot(obj, desired) if obj is not None else {}
         last = None
@@ -386,6 +427,28 @@ def attach_created_device(binding):
         binding.save()
 
 
+def carry_decisions(run, rows):
+    """
+    Keep the decisions made on the run's previous plan for items that did
+    not change (same action, values and diff), so planning again does not
+    throw a long review away. Returns how many were kept.
+    """
+    previous = {
+        change.key: change for change in run.changes.exclude(decision=DecisionChoices.PENDING)
+        .only('key', 'action', 'proposed', 'diff', 'decision', 'decided_by')
+    }
+    kept = 0
+    for row in rows:
+        old = previous.get(row.key)
+        if old is None or old.decision == row.decision:
+            continue
+        if (old.action, old.proposed, old.diff) == (row.action, row.proposed, row.diff):
+            row.decision = old.decision
+            row.decided_by_id = old.decided_by_id
+            kept += 1
+    return kept
+
+
 def plan(run: ImportRun):
     """Build (or rebuild) the plan of a run. Returns the saved rows."""
     if run.binding_id is None:
@@ -407,6 +470,9 @@ def plan(run: ImportRun):
         if locked.status not in (RunStatusChoices.PARSED, RunStatusChoices.PLANNED) or busy(locked):
             raise PlanError('This run has a job queued or running, or was applied meanwhile; it cannot be '
                             'planned again now.')
+        carried = carry_decisions(run, rows)
+        if carried:
+            notes.append(f'{carried} review decisions were kept from the previous plan (unchanged items).')
         run.changes.all().delete()
         PlannedChange.objects.bulk_create(rows)
         run.options = planner.options

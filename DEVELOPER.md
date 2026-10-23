@@ -81,7 +81,9 @@ and with all of them installed.
     restored from `prechange_data` with `deserialize_object()`. Refused
     when any of those objects has a later change log entry, or when
     deleting a created object would cascade to anything the import did not
-    create (`cascade_victims()`). The import tag
+    create (`cascade_victims()`), or when the change log no longer has the
+    entries of the objects the apply created (retention). Changes approved
+    later by their approver are not undone, so their records stay. The import tag
     and change-approval's own records are left alone.
 
 ## Ownership rules
@@ -98,6 +100,17 @@ and with all of them installed.
 - **Partial** objects (the bound device) are never created or deleted;
   the importer owns only its platform, serial, config context key
   `fortigate`, virtual chassis fields and primary IPv4.
+- **Not taken over:** an existing object assigned to another device or VM
+  (an IP on another firewall's interface) is never adopted; a new one is
+  planned (`Planner.assigned_elsewhere()`).
+- **Nothing removed from an incomplete file:** when the parser reports a
+  truncated file, or a VDOM of a managed object is missing, the plan holds
+  those removals back with a note.
+- **Decisions survive re-planning** for rows whose action, values and diff
+  are unchanged (`carry_decisions()`).
+- **Text is text:** configuration strings that look like reference tokens
+  (`$ref:...`) are escaped with an extra `$` in the plan and unescaped when
+  written (`escape_literals()`).
 
 ## NetBox objects
 

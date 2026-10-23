@@ -28,7 +28,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from . import integrations
-from .mappers.base import is_ref_token, ref_key, read_field, read_m2m, sort_values, write_field
+from .mappers.base import is_ref_token, ref_key, unescape_literal, read_field, read_m2m, sort_values, write_field
 from .models import (
     ActionChoices, DecisionChoices, ImportRun, ManagedObject, OutcomeChoices, PlannedChange, RunStatusChoices,
 )
@@ -166,6 +166,8 @@ class Applier:
         self.gate = None
         #: (content type, pk) of the objects this apply deletes.
         self.removing = set()
+        #: Keys whose object was written but whose deferred fields failed.
+        self.deferred_failed = set()
 
     def load(self):
         self.options = self.run.options or {}
@@ -216,14 +218,25 @@ class Applier:
             return [self.resolve(v) for v in value]
         if isinstance(value, dict):
             return {k: self.resolve(v) for k, v in value.items()}
-        return value
+        return unescape_literal(value)
 
-    def baseline(self, row):
-        """The owned values as written, for ManagedObject.fields."""
+    def baseline(self, row, deferred_written=True):
+        """
+        The owned values as written, for ManagedObject.fields. Deferred
+        fields that were not written (the item waits for approval, or the
+        deferred pass failed) keep their earlier baseline, or none, so the
+        next plan proposes them again.
+        """
         values = {}
         proposed = row.proposed or {}
-        for name, value in list(proposed.get('fields', {}).items()) + list(proposed.get('deferred', {}).items()):
+        for name, value in proposed.get('fields', {}).items():
             values[name] = self.resolve(value)
+        earlier = ((row.managed_before or {}).get('fields') or {})
+        for name, value in proposed.get('deferred', {}).items():
+            if deferred_written:
+                values[name] = self.resolve(value)
+            elif name in earlier:
+                values[name] = earlier[name]
         for name, value in proposed.get('m2m', {}).items():
             values[name] = sort_values(self.resolve(value))
         values[META] = {
@@ -307,7 +320,9 @@ class Applier:
             else:
                 write_field(obj, name, self.resolve(proposed['fields'][name]))
         action = 'add' if created else 'change'
-        if created or names - set(m2m):
+        if created or names:
+            # Also for many-to-many only changes, like a form: full_clean(),
+            # the change log message, then the relations.
             self.save(obj, action)
         for name, pks in m2m.items():
             getattr(obj, name).set(pks)
@@ -360,7 +375,7 @@ class Applier:
     def record(self, row, outcome, error=''):
         self.results[row.key] = {'outcome': outcome, 'error': error}
 
-    def managed_after(self, row, outcome):
+    def managed_after(self, row, outcome, deferred_written=True):
         """Update the ManagedObject of a row that was written (or queued)."""
         confirmed = outcome == OutcomeChoices.APPLIED
         if row.action in REMOVALS:
@@ -373,11 +388,11 @@ class Applier:
         ManagedObject.objects.update_or_create(
             binding=self.binding, key=row.key,
             defaults={
-                'object_type': row.object_type, 'object_id': pk, 'fields': self.baseline(row),
+                'object_type': row.object_type, 'object_id': pk, 'fields': self.baseline(row, deferred_written),
                 'last_run': self.run, 'confirmed': confirmed,
             },
             create_defaults={
-                'object_type': row.object_type, 'object_id': pk, 'fields': self.baseline(row),
+                'object_type': row.object_type, 'object_id': pk, 'fields': self.baseline(row, deferred_written),
                 'first_run': self.run, 'last_run': self.run, 'confirmed': confirmed,
             },
         )
@@ -496,10 +511,15 @@ class Applier:
             if outcome not in (OutcomeChoices.APPLIED, OutcomeChoices.SUBMITTED) or row.key not in self.keys:
                 continue
             if (row.proposed or {}).get('deferred') and outcome == OutcomeChoices.APPLIED:
-                self.item(row, lambda r: self.write(r, deferred=True), record=False)
+                if self.item(row, lambda r: self.write(r, deferred=True), record=False) != OutcomeChoices.APPLIED:
+                    self.deferred_failed.add(row.key)
         for row in todo:
-            if self.results[row.key]['outcome'] in (OutcomeChoices.APPLIED, OutcomeChoices.SUBMITTED):
-                self.managed_after(row, self.results[row.key]['outcome'])
+            outcome = self.results[row.key]['outcome']
+            if row.key in self.deferred_failed:
+                # The object itself was written and is kept (continue_on_error).
+                self.managed_after(row, OutcomeChoices.APPLIED, deferred_written=False)
+            elif outcome in (OutcomeChoices.APPLIED, OutcomeChoices.SUBMITTED):
+                self.managed_after(row, outcome, deferred_written=outcome == OutcomeChoices.APPLIED)
 
     def counts(self):
         counts = {}
@@ -523,7 +543,9 @@ class Applier:
                     self.lock()
                     self.check()
                     continue_on_error = self.options.get('continue_on_error')
-                    if integrations.has_change_approval() and not self.dry_run:
+                    # Dry runs too: approvals are simulated, and the change
+                    # set and requests roll back with everything else.
+                    if integrations.has_change_approval():
                         from .integrations.change_approval import Gate
 
                         self.gate = Gate(self)

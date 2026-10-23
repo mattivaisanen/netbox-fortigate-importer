@@ -70,3 +70,23 @@ Fixed:
   FortiGate no longer apply at the same time.
 - Changing decisions clears the last dry run, which no longer matches.
 - The review page only returns to addresses on this NetBox after a decision.
+- A configuration that looks truncated, or lacks VDOMs that earlier imports
+  had, no longer proposes deleting what is missing; the plan says why.
+- IP addresses assigned to another device are no longer taken over (branches
+  that reuse the same subnets); a new address is proposed instead.
+- Planning again keeps the review decisions of items that did not change.
+- Dry runs show what would wait for approval with netbox-change-approval.
+- Fields written last (primary IP, virtual chassis master) that were not
+  written, because the change waits for approval or failed with "keep going
+  past failed items", are proposed again by the next import instead of
+  being forgotten; the object itself stays managed.
+- Rollback refuses when NetBox's change log no longer has the import's
+  entries, instead of only forgetting the objects.
+- Rollback keeps tracking changes that were approved and applied later by
+  their approver (netbox-change-approval), and says so.
+- An approved "deprecate" stops managing the object, like a direct apply.
+- A prefix or access list rule whose prefix cannot be read no longer
+  matches everything: a permit is left out, a deny becomes "deny any".
+- Text in a configuration that starts with "$ref:" is written as text.
+- Changes to many-to-many fields alone (tagged VLANs, members) go through
+  full_clean() and carry the import's change log message.

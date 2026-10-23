@@ -88,3 +88,49 @@ class ChangeApprovalTest(ImportTestCase):
         rollback.rollback(run, self.engineer)
         update = run.changes.get(key='interface/wan1')
         self.assertEqual(ChangeRequest.objects.get(pk=update.change_request_id).status, StatusChoices.RETRACTED)
+
+    def test_dry_run_shows_what_would_wait_for_approval(self):
+        from netbox_change_approval.models import ChangeRequest, ChangeSet
+
+        binding, _ = self.first_import()
+        data = data_of(HQ)
+        interface(data, 'wan1')['description'] = 'New circuit'
+        run = self.plan(binding, data)
+        self.approve_all(run)
+        applier.apply(run, self.engineer, dry_run=True)
+        run.refresh_from_db()
+        self.assertEqual(run.dry_run['items']['interface/wan1']['outcome'], OutcomeChoices.SUBMITTED)
+        self.assertFalse(ChangeSet.objects.exists())
+        self.assertFalse(ChangeRequest.objects.exists())
+
+    def test_rollback_keeps_tracking_changes_approved_later(self):
+        from netbox_change_approval.models import ChangeRequest
+
+        binding, _ = self.first_import()
+        run = self.delta_run(binding)
+        update = run.changes.get(key='interface/wan1')
+        ChangeRequest.objects.get(pk=update.change_request_id).apply(self.user)
+        rollback.rollback(run, self.engineer)
+        run.refresh_from_db()
+        self.assertEqual(run.status, RunStatusChoices.ROLLED_BACK)
+        self.assertIn('approved', run.error)
+        self.assertEqual(Interface.objects.get(device=binding.device, name='wan1').description, 'New circuit')
+        managed = ManagedObject.objects.get(binding=binding, key='interface/wan1')
+        self.assertEqual(managed.fields['description'], 'New circuit')
+
+    def test_approved_deprecation_stops_managing(self):
+        from netbox_change_approval.models import ChangeRequest
+
+        binding, _ = self.first_import()
+        binding.options = {'default_delete_action': 'deprecate'}
+        binding.save()
+        data = data_of(HQ)
+        interface(data, 'vlan10')['secondary_ips'] = []
+        run = self.plan(binding, data)
+        row = run.changes.get(action='deprecate')
+        self.approve_all(run)
+        applier.apply(run, self.engineer)
+        row.refresh_from_db()
+        self.assertEqual(row.outcome, OutcomeChoices.SUBMITTED, row.error)
+        ChangeRequest.objects.get(pk=row.change_request_id).apply(self.user)
+        self.assertFalse(ManagedObject.objects.filter(binding=binding, key=row.key).exists())

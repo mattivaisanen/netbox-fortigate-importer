@@ -133,7 +133,8 @@ def request_saved(sender, instance, created=False, **kwargs):
         if instance.status == StatusChoices.APPLIED:
             change.outcome = OutcomeChoices.APPLIED
             if change.action in ('delete', 'deprecate', 'unmanage'):
-                if change.action == 'delete' and managed is not None:
+                # Like a direct apply: the importer stops managing it.
+                if change.action in ('delete', 'deprecate') and managed is not None:
                     managed.delete()
             elif managed is not None:
                 managed.confirmed = True

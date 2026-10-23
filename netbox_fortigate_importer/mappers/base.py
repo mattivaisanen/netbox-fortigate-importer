@@ -41,6 +41,25 @@ def ref_key(token):
     return token[len('$ref:'):]
 
 
+def escape_literals(value):
+    """
+    Text from the configuration that looks like a reference token (a
+    description "$ref:interface/port1") gets an extra "$", so the applier
+    writes it as text. References themselves are tokens made by normalize().
+    """
+    if isinstance(value, str):
+        return '$' + value if value.startswith(('$ref:', '$$')) else value
+    if isinstance(value, list):
+        return [escape_literals(v) for v in value]
+    if isinstance(value, dict):
+        return {k: escape_literals(v) for k, v in value.items()}
+    return value
+
+
+def unescape_literal(value):
+    return value[1:] if isinstance(value, str) and value.startswith('$$') else value
+
+
 #: Order in which models are written (lower first). Deletes run in reverse.
 MODEL_ORDER = {
     'dcim.manufacturer': 10,

@@ -23,7 +23,7 @@ from django.utils import timezone
 
 from . import integrations
 from .applier import cascade_victims, error_text, fake_request, require
-from .models import FortiGateBinding, ManagedObject, OutcomeChoices, PlannedChange, RunStatusChoices
+from .models import ActionChoices, FortiGateBinding, ManagedObject, OutcomeChoices, PlannedChange, RunStatusChoices
 
 
 class RollbackError(Exception):
@@ -61,6 +61,17 @@ def later_edits(run, changes=None):
         if (change.changed_object_type_id, change.changed_object_id) in objects:
             found.append((change.object_repr, change.user_name, change.time))
     return found
+
+
+def missing_entries(run, changes):
+    """How many objects the apply created that have no create entry in the change log."""
+    from core.choices import ObjectChangeActionChoices as Action
+
+    created = {(c.changed_object_type_id, c.changed_object_id) for c in changes if c.action == Action.ACTION_CREATE}
+    rows = run.changes.filter(action=ActionChoices.CREATE, outcome__in=(OutcomeChoices.APPLIED,
+                                                                         OutcomeChoices.SUBMITTED),
+                              object_id__isnull=False, change_request_id__isnull=True)
+    return sum(1 for row in rows.values_list('object_type_id', 'object_id') if tuple(row) not in created)
 
 
 def created_objects(changes):
@@ -130,6 +141,11 @@ def rollback(run, user):
     if not run.can_rollback:
         raise RollbackError(f'A run that is "{run.get_status_display()}" cannot be rolled back.')
     changes = _changes(run)
+    missing = missing_entries(run, changes)
+    if missing:
+        raise RollbackError(
+            f'NetBox\'s change log no longer has what this import wrote ({missing} objects missing; '
+            'change log retention may have removed it). Rolling back would only forget the objects.')
     edits = later_edits(run, changes)
     if edits:
         names = ', '.join(sorted({repr_ for repr_, _, _ in edits})[:10])
@@ -158,7 +174,9 @@ def rollback(run, user):
                     raise
                 except Exception as exc:  # noqa: BLE001
                     raise RollbackError(f'{change.object_repr}: {error_text(exc)}') from exc
-            restore_records(run)
+            kept = restore_records(run)
+            run.error = (f'{kept} changes were approved and applied by their approver later; they are not '
+                         'rolled back. Undo them in NetBox if needed.') if kept else ''
             run.status = RunStatusChoices.ROLLED_BACK
             run.rolled_back = timezone.now()
             run.rollback_request_id = request_id
@@ -188,9 +206,21 @@ def detach_device(run, changes):
         binding.save()
 
 
+def approved_later(run):
+    """
+    Changes that waited for approval and were applied by their approver
+    later, under the approver's request: rollback does not undo them, so the
+    importer keeps tracking them. (Creates are written during the apply,
+    so they are rolled back.)
+    """
+    return run.changes.filter(outcome=OutcomeChoices.APPLIED, change_request_id__isnull=False) \
+        .exclude(action=ActionChoices.CREATE)
+
+
 def restore_records(run):
     """The importer's ManagedObject rows as they were before the apply."""
-    rows = list(run.changes.exclude(outcome=OutcomeChoices.NONE))
+    kept = set(approved_later(run).values_list('pk', flat=True))
+    rows = list(run.changes.exclude(outcome=OutcomeChoices.NONE).exclude(pk__in=kept))
     for change in rows:
         before = change.managed_before
         ManagedObject.objects.filter(binding_id=run.binding_id, key=change.key).delete()
@@ -202,4 +232,5 @@ def restore_records(run):
                 first_run_id=before.get('first_run'), last_run_id=before.get('last_run'),
             )
     PlannedChange.objects.filter(run=run, outcome__in=(OutcomeChoices.APPLIED, OutcomeChoices.SUBMITTED)) \
-        .update(outcome=OutcomeChoices.ROLLED_BACK)
+        .exclude(pk__in=kept).update(outcome=OutcomeChoices.ROLLED_BACK)
+    return len(kept)

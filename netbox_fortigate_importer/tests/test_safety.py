@@ -146,3 +146,101 @@ class MatchTest(ImportTestCase):
         other = Device.objects.create(name='other', site=self.site, device_type=self.device_type, role=self.role)
         FortiGateBinding.objects.create(name='Other', device=other, hostname='FGT60F', serial='FGT60F001')
         self.assertNotIn(other, services.candidate_devices({'hostname': 'FGT60F', 'serial': 'FGT60F002'}))
+
+
+class IncompleteConfigTest(ImportTestCase):
+    def test_truncated_config_removes_nothing(self):
+        binding, _ = self.first_import()
+        data = data_of(HQ)
+        data['interfaces'] = [i for i in data['interfaces'] if i['name'] != 'port15']
+        data['warnings'].append('file ends inside "system interface": it may be truncated')
+        run = self.plan(binding, data)
+        self.assertFalse(run.changes.filter(action__in=('delete', 'deprecate', 'unmanage')).exists())
+        self.assertTrue(any('truncated' in note for note in run.summary['notes']))
+
+    def test_missing_vdom_is_left_alone(self):
+        binding, _ = self.first_import()
+        data = data_of(HQ)
+        data['vdoms'].pop('CUST-A')
+        data['interfaces'] = [i for i in data['interfaces'] if i['vdom'] != 'CUST-A']
+        data['connected'] = [n for n in data['connected'] if n['vdom'] != 'CUST-A']
+        run = self.plan(binding, data)
+        self.assertFalse(run.changes.filter(vdom='CUST-A', action__in=('delete', 'deprecate', 'unmanage')).exists())
+        self.assertTrue(any('VDOM CUST-A is not in this configuration' in n for n in run.summary['notes']))
+
+
+class AdoptionTest(ImportTestCase):
+    def test_addresses_of_another_firewall_are_not_taken_over(self):
+        first = self.make_binding('FW-A')
+        second = self.make_binding('FW-B')
+        for binding in (first, second):
+            binding.options = {'vrf_per_vdom': False}
+            binding.save()
+        data = data_of(HQ)  # one VDOM: no VRFs, the global address space
+        data['interfaces'] = [i for i in data['interfaces'] if i['vdom'] != 'CUST-A']
+        data['connected'] = [n for n in data['connected'] if n['vdom'] != 'CUST-A']
+        self.apply(self.plan(first, data))
+        run = self.plan(second, data)
+        row = run.changes.get(key='ip/mgmt/192.168.255.10')
+        self.assertEqual(row.action, 'create')
+        self.assertIn('another device', row.note)
+
+
+class ReviewTest(ImportTestCase):
+    def test_planning_again_keeps_decisions(self):
+        binding, _ = self.first_import()
+        data = data_of(HQ)
+        next(i for i in data['interfaces'] if i['name'] == 'wan1')['description'] = 'New circuit'
+        data['interfaces'] = [i for i in data['interfaces'] if i['name'] != 'port15']
+        run = self.plan(binding, data)
+        run.changes.filter(key='interface/wan1').update(decision='skipped', decided_by=self.user)
+        run.changes.filter(key='interface/port15').update(decision='approved', decided_by=self.user)
+        planner.plan(run)
+        self.assertEqual(run.changes.get(key='interface/wan1').decision, 'skipped')
+        self.assertEqual(run.changes.get(key='interface/port15').decision, 'approved')
+        self.assertTrue(any('kept from the previous plan' in n for n in run.summary['notes']))
+
+    def test_reference_like_text_is_written_as_text(self):
+        data = data_of(HQ)
+        next(i for i in data['interfaces'] if i['name'] == 'port15')['description'] = '$ref:interface/wan1'
+        binding = self.make_binding()
+        run = self.plan(binding, data)
+        self.apply(run)
+        self.assertEqual(run.status, RunStatusChoices.APPLIED, run.error)
+        self.assertEqual(Interface.objects.get(device=binding.device, name='port15').description,
+                         '$ref:interface/wan1')
+        self.assertEqual(set(self.plan(binding, data).summary['actions']), {'noop'})
+
+
+class RecordTest(ImportTestCase):
+    def test_failed_deferred_fields_keep_the_object_managed(self):
+        from unittest import mock
+
+        binding = self.make_binding()
+        binding.options = {'continue_on_error': True}
+        binding.save()
+        run = self.plan(binding, data_of(HQ))
+        original = applier.Applier.write
+
+        def write(self, row, deferred=False):
+            if deferred and row.key == 'device':
+                raise ValueError('no primary IP today')
+            return original(self, row, deferred)
+
+        with mock.patch.object(applier.Applier, 'write', write):
+            self.apply(run)
+        self.assertEqual(run.status, RunStatusChoices.APPLIED)
+        self.assertEqual(run.changes.get(key='device').outcome, OutcomeChoices.FAILED)
+        managed = binding.managed_objects.get(key='device')
+        self.assertNotIn('primary_ip4', managed.fields)
+        # The next plan offers the primary IP again.
+        row = self.plan(binding, data_of(HQ)).changes.get(key='device')
+        self.assertIn('primary_ip4', [d['field'] for d in row.diff])
+
+    def test_rollback_refuses_without_change_log(self):
+        from core.models import ObjectChange
+
+        _, run = self.first_import()
+        ObjectChange.objects.filter(request_id=run.apply_request_id).delete()
+        with self.assertRaisesMessage(rollback.RollbackError, 'change log no longer has'):
+            rollback.rollback(run, self.user)

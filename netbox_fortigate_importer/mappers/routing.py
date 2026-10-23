@@ -215,7 +215,16 @@ class VdomRouting:
                      lookup={'name__iexact': name})
             self.lists['prefix'][item['name']] = key
             for rule in item['rules']:
-                prefix = None if rule['prefix'] in (None, 'any') else str(
+                if rule['prefix'] is None:
+                    # Never match more than the firewall does: a permit is left
+                    # out, a deny denies everything from here on.
+                    what = 'left out' if rule['action'] == 'permit' else 'imported as "deny any"'
+                    self.ctx.note(f'{source.capitalize()} {item["name"]} rule {rule["id"]} ({self.vdom}): '
+                                  f'its prefix cannot be read; {what}. Check it in NetBox.')
+                    if rule['action'] == 'permit':
+                        continue
+                    rule = {**rule, 'prefix': 'any', 'ge': None, 'le': None, 'exact_match': False}
+                prefix = None if rule['prefix'] == 'any' else str(
                     ipaddress.ip_network(rule['prefix'], strict=False))
                 ge, le = rule.get('ge'), rule.get('le')
                 if source == 'access list' and prefix and not rule.get('exact_match'):

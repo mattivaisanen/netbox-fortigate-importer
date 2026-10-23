@@ -61,6 +61,8 @@ class Gate:
         self._stack = []
         if exc_info[0] is not None:
             return False
+        if self.applier.dry_run:
+            return False  # rolled back with the rest; nothing to submit
         if self.change_set.requests().exists():
             changesets.submit(self.change_set)
             self.applier.run.change_set_id = self.change_set.pk
@@ -133,7 +135,8 @@ def request_saved(sender, instance, created=False, **kwargs):
         if instance.status == StatusChoices.APPLIED:
             change.outcome = OutcomeChoices.APPLIED
             if change.action in ('delete', 'deprecate', 'unmanage'):
-                if change.action == 'delete' and managed is not None:
+                # Like a direct apply: the importer stops managing it.
+                if change.action in ('delete', 'deprecate') and managed is not None:
                     managed.delete()
             elif managed is not None:
                 managed.confirmed = True

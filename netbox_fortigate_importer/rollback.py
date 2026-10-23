@@ -22,8 +22,8 @@ from django.db import transaction
 from django.utils import timezone
 
 from . import integrations
-from .applier import error_text, fake_request
-from .models import FortiGateBinding, ManagedObject, OutcomeChoices, PlannedChange, RunStatusChoices
+from .applier import cascade_victims, error_text, fake_request, require
+from .models import ActionChoices, FortiGateBinding, ManagedObject, OutcomeChoices, PlannedChange, RunStatusChoices
 
 
 class RollbackError(Exception):
@@ -56,14 +56,40 @@ def later_edits(run, changes=None):
     last = max(change.time for change in changes)
     objects = {(c.changed_object_type_id, c.changed_object_id) for c in changes}
     found = []
-    later = ObjectChange.objects.filter(time__gt=last).exclude(request_id=run.apply_request_id)
+    later = ObjectChange.objects.filter(
+        time__gt=last, changed_object_type_id__in={t for t, _ in objects},
+        changed_object_id__in={i for _, i in objects},
+    ).exclude(request_id=run.apply_request_id)
     for change in later.order_by('time'):
         if (change.changed_object_type_id, change.changed_object_id) in objects:
             found.append((change.object_repr, change.user_name, change.time))
     return found
 
 
-def _undo(change):
+def missing_entries(run, changes):
+    """How many objects the apply created that have no create entry in the change log."""
+    from core.choices import ObjectChangeActionChoices as Action
+
+    created = {(c.changed_object_type_id, c.changed_object_id) for c in changes if c.action == Action.ACTION_CREATE}
+    rows = run.changes.filter(action=ActionChoices.CREATE, outcome__in=(OutcomeChoices.APPLIED,
+                                                                         OutcomeChoices.SUBMITTED),
+                              object_id__isnull=False, change_request_id__isnull=True)
+    return sum(1 for row in rows.values_list('object_type_id', 'object_id') if tuple(row) not in created)
+
+
+def created_objects(changes):
+    """(content type pk, pk) of every object the import created."""
+    from core.choices import ObjectChangeActionChoices as Action
+
+    return {(c.changed_object_type_id, c.changed_object_id) for c in changes if c.action == Action.ACTION_CREATE}
+
+
+def _undo(change, user, created=frozenset()):
+    """
+    Undo one change log entry as `user` (their NetBox permissions apply).
+    Deleting a created object must not take anything else with it that the
+    import did not create (an IP someone added to an imported interface).
+    """
     from core.choices import ObjectChangeActionChoices as Action
     from utilities.serialization import deserialize_object
 
@@ -71,18 +97,30 @@ def _undo(change):
     current = model.objects.filter(pk=change.changed_object_id).first()
     if change.action == Action.ACTION_CREATE:
         if current is not None:
+            require(user, current, 'delete')
+            victims = cascade_victims(current, created)
+            if victims:
+                raise RollbackError(
+                    f'{change.object_repr}: deleting it would also delete newer work: {", ".join(victims)}. '
+                    'Remove or move those first.')
             current.snapshot()
             current.delete()
         return
     if not change.prechange_data:
         raise RollbackError(f'{change.object_repr}: the change log has no earlier data to restore')
     restored = deserialize_object(model, change.prechange_data, pk=change.changed_object_id)
-    if current is not None:
+    if current is None:
+        action = 'add'
+        require(user, model(), action)  # the model permission; constraints once saved
+    else:
+        action = 'change'
+        require(user, current, action)
         restored.object._state.adding = False
         restored.object._state.db = current._state.db
         restored.object._prechange_snapshot = current.serialize_object()
     restored.object.full_clean()
     restored.save()
+    require(user, model.objects.get(pk=change.changed_object_id), action)
 
 
 def withdraw_requests(run, user):
@@ -105,29 +143,44 @@ def rollback(run, user):
 
     if not run.can_rollback:
         raise RollbackError(f'A run that is "{run.get_status_display()}" cannot be rolled back.')
-    changes = _changes(run)
-    edits = later_edits(run, changes)
-    if edits:
-        names = ', '.join(sorted({repr_ for repr_, _, _ in edits})[:10])
-        raise RollbackError(f'Changed in NetBox after this import, so rollback would overwrite newer work: {names}')
-    newer = run.binding.runs.filter(applied__gt=run.applied).exclude(pk=run.pk) if run.binding_id else None
-    if newer is not None and newer.exclude(status=RunStatusChoices.ROLLED_BACK).exists():
-        raise RollbackError('A later import of this FortiGate was applied. Roll that one back first.')
-
     request_id = uuid.uuid4()
     request = fake_request(user, request_id)
     with apply_request_processors(request):
         with transaction.atomic():
+            # Wait for an apply or rollback of the same FortiGate, then look again.
+            if run.binding_id:
+                list(FortiGateBinding.objects.select_for_update().filter(pk=run.binding_id).values_list('pk'))
+            locked = type(run).objects.select_for_update().get(pk=run.pk)
+            if not locked.can_rollback:
+                raise RollbackError(f'A run that is "{locked.get_status_display()}" cannot be rolled back.')
+            # Checked under the lock, so nothing changes between check and undo.
+            changes = _changes(run)
+            missing = missing_entries(run, changes)
+            if missing:
+                raise RollbackError(
+                    f'NetBox\'s change log no longer has what this import wrote ({missing} objects missing; '
+                    'change log retention may have removed it). Rolling back would only forget the objects.')
+            edits = later_edits(run, changes)
+            if edits:
+                names = ', '.join(sorted({repr_ for repr_, _, _ in edits})[:10])
+                raise RollbackError('Changed in NetBox after this import, so rollback would overwrite newer '
+                                    f'work: {names}')
+            newer = run.binding.runs.filter(applied__gt=run.applied).exclude(pk=run.pk) if run.binding_id else None
+            if newer is not None and newer.exclude(status=RunStatusChoices.ROLLED_BACK).exists():
+                raise RollbackError('A later import of this FortiGate was applied. Roll that one back first.')
             withdraw_requests(run, user)
             detach_device(run, changes)
+            created = created_objects(changes)
             for change in changes:
                 try:
-                    _undo(change)
+                    _undo(change, user, created)
                 except RollbackError:
                     raise
                 except Exception as exc:  # noqa: BLE001
                     raise RollbackError(f'{change.object_repr}: {error_text(exc)}') from exc
-            restore_records(run)
+            kept = restore_records(run)
+            run.error = (f'{kept} changes were approved and applied by their approver later; they are not '
+                         'rolled back. Undo them in NetBox if needed.') if kept else ''
             run.status = RunStatusChoices.ROLLED_BACK
             run.rolled_back = timezone.now()
             run.rollback_request_id = request_id
@@ -157,9 +210,21 @@ def detach_device(run, changes):
         binding.save()
 
 
+def approved_later(run):
+    """
+    Changes that waited for approval and were applied by their approver
+    later, under the approver's request: rollback does not undo them, so the
+    importer keeps tracking them. (Creates are written during the apply,
+    so they are rolled back.)
+    """
+    return run.changes.filter(outcome=OutcomeChoices.APPLIED, change_request_id__isnull=False) \
+        .exclude(action=ActionChoices.CREATE)
+
+
 def restore_records(run):
     """The importer's ManagedObject rows as they were before the apply."""
-    rows = list(run.changes.exclude(outcome=OutcomeChoices.NONE))
+    kept = set(approved_later(run).values_list('pk', flat=True))
+    rows = list(run.changes.exclude(outcome=OutcomeChoices.NONE).exclude(pk__in=kept))
     for change in rows:
         before = change.managed_before
         ManagedObject.objects.filter(binding_id=run.binding_id, key=change.key).delete()
@@ -171,4 +236,5 @@ def restore_records(run):
                 first_run_id=before.get('first_run'), last_run_id=before.get('last_run'),
             )
     PlannedChange.objects.filter(run=run, outcome__in=(OutcomeChoices.APPLIED, OutcomeChoices.SUBMITTED)) \
-        .update(outcome=OutcomeChoices.ROLLED_BACK)
+        .exclude(pk__in=kept).update(outcome=OutcomeChoices.ROLLED_BACK)
+    return len(kept)

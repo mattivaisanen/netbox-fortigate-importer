@@ -39,6 +39,41 @@ class TokenizerTests(SimpleTestCase):
         self.assertEqual(policy.values['action'], ['accept'])
         self.assertIn('unbalanced quote', result.warnings[0])
 
+    def test_scripts_stay_text(self):
+        # Multi-line scripts look like CLI commands; they must not be run
+        # against the tree (they would add objects that do not exist).
+        text = (
+            'config system automation-action\n'
+            '    edit "add-addr"\n'
+            '        set action-type cli-script\n'
+            '        set script "config firewall address\n'
+            'edit injected\n'
+            'set subnet 10.66.0.0 255.255.0.0\n'
+            'next\n'
+            'end"\n'
+            '    next\n'
+            'end\n'
+            'config system auto-script\n'
+            '    edit "backup"\n'
+            '        set script "config system global\n'
+            'set hostname \\"evil\\"\n'
+            'end"\n'
+            '    next\n'
+            'end\n'
+            'config firewall address\n'
+            '    edit "real"\n'
+            '        set subnet 10.1.0.0 255.255.0.0\n'
+            '    next\n'
+            'end\n'
+        )
+        result = parse(text)
+        self.assertEqual(result.warnings, [])
+        self.assertEqual(list(result.root.tables['firewall address'].entries), ['real'])
+        self.assertNotIn('system global', result.root.tables)
+        action = result.root.tables['system automation-action'].entries['add-addr']
+        self.assertTrue(action.get('script').startswith('config firewall address\nedit injected'))
+        self.assertIn('set hostname "evil"', result.root.tables['system auto-script'].entries['backup'].get('script'))
+
     def test_batfish_replacemsg_escapes(self):
         """Batfish's own expectation for its odd-quoting fixture."""
         result = parse((BATFISH / 'fortios_replacemsg.conf').read_text())
@@ -102,6 +137,14 @@ class SecretTests(SimpleTestCase):
                 for marker in SECRET_MARKERS:
                     self.assertNotIn(marker, document)
 
+    def test_more_secret_keys(self):
+        result = parse('config user krb-keytab\nedit k1\nset principal HTTP/fw\nset keytab "abc123"\nnext\nend\n'
+                       'config router rip\nconfig interface\nedit port1\nset auth-string "s3cret"\nnext\nend\nend\n')
+        self.assertNotIn('keytab', result.root.tables['user krb-keytab'].entries['k1'].values)
+        rip_port = result.root.tables['router rip'].tables['interface'].entries['port1']
+        self.assertNotIn('auth-string', rip_port.values)
+        self.assertEqual(result.secrets_removed, 2)
+
     def test_secrets_are_counted_not_kept(self):
         result = parse(read_config_bytes(read(HQ)))
         self.assertGreaterEqual(result.secrets_removed, 8)
@@ -128,6 +171,23 @@ class FileTests(SimpleTestCase):
         import gzip
 
         self.assertEqual(read_config_bytes(gzip.compress(read(BRANCH))), read(BRANCH).decode())
+
+    def test_decompression_limit(self):
+        import gzip
+
+        bomb = gzip.compress(b'#' * (2 * 1024 * 1024))
+        with self.assertRaisesMessage(UnsupportedFormat, 'larger than 1 MB'):
+            read_config_bytes(bomb, max_size=1024 * 1024)
+        self.assertEqual(len(read_config_bytes(bomb, max_size=3 * 1024 * 1024)), 2 * 1024 * 1024)
+        sealed = encrypt_backup('#' * (2 * 1024 * 1024), 'pw')
+        with self.assertRaisesMessage(UnsupportedFormat, 'larger than 1 MB'):
+            read_config_bytes(sealed, 'pw', max_size=1024 * 1024)
+
+    def test_damaged_gzip(self):
+        import gzip
+
+        with self.assertRaisesMessage(UnsupportedFormat, 'damaged'):
+            read_config_bytes(gzip.compress(b'config system global\nend\n')[:-12])
 
     def test_truncated_encrypted(self):
         with self.assertRaises(UnsupportedFormat):

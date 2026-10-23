@@ -56,6 +56,9 @@ class PlannedChangeFilterSet(BaseFilterSet):
     vdom = django_filters.CharFilter()
     run_id = django_filters.ModelMultipleChoiceFilter(queryset=ImportRun.objects.all())
     changed = django_filters.BooleanFilter(method='filter_changed', label=_('Hide unchanged'))
+    dry_run = django_filters.MultipleChoiceFilter(
+        choices=OutcomeChoices, method='filter_dry_run', label=_('Last dry run result'),
+    )
 
     class Meta:
         model = PlannedChange
@@ -68,3 +71,15 @@ class PlannedChangeFilterSet(BaseFilterSet):
 
     def filter_changed(self, queryset, name, value):
         return queryset.exclude(action=ActionChoices.NOOP) if value else queryset
+
+    def filter_dry_run(self, queryset, name, value):
+        """Changes by their result in their run's last dry run (kept on the run, not the change)."""
+        if not value:
+            return queryset
+        wanted = Q(pk__in=[])
+        runs = ImportRun.objects.filter(pk__in=queryset.values('run_id')).only('pk', 'dry_run')
+        for run in runs:
+            items = (run.dry_run or {}).get('items', {})
+            keys = [key for key, item in items.items() if item.get('outcome') in value]
+            wanted |= Q(run_id=run.pk, key__in=keys)
+        return queryset.filter(wanted)

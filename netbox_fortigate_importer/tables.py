@@ -1,9 +1,10 @@
 import django_tables2 as tables
+from django.utils.html import format_html
 from django.utils.translation import gettext_lazy as _
 
 from netbox.tables import NetBoxTable, columns
 
-from .models import FortiGateBinding, ImportRun, PlannedChange
+from .models import FortiGateBinding, ImportRun, OutcomeChoices, PlannedChange
 
 
 class FortiGateBindingTable(NetBoxTable):
@@ -57,14 +58,35 @@ class PlannedChangeTable(NetBoxTable):
                       ' me-1">{{ d.field }}</span>{% endfor %}{% if record.diff|length > 4 %}…{% endif %}',
         orderable=False, verbose_name=_('Fields'),
     )
+    dry_run = tables.Column(empty_values=(), orderable=False, verbose_name=_('Dry run'))
     actions = columns.ActionsColumn(actions=())
+
+    def __init__(self, *args, dry_run=None, **kwargs):
+        #: key -> {'outcome', 'error'} from the run's last dry run.
+        self.dry_run_items = (dry_run or {}).get('items', {})
+        super().__init__(*args, **kwargs)
+
+    def render_dry_run(self, record):
+        item = self.dry_run_items.get(record.key)
+        if not item:
+            return '—'
+        outcome = item.get('outcome') or ''
+        labels = {value: (label, color) for value, label, color in OutcomeChoices.CHOICES}
+        label, color = labels.get(outcome, (outcome, 'gray'))
+        if outcome == OutcomeChoices.APPLIED:
+            label = _('Would apply')
+        return format_html(
+            '<span class="badge text-bg-{}">{}</span>{}', color, label,
+            format_html(' <span class="small text-danger">{}</span>', item['error']) if item.get('error') else '',
+        )
 
     class Meta(NetBoxTable.Meta):
         model = PlannedChange
         fields = (
             'pk', 'id', 'order', 'label', 'action', 'decision', 'outcome', 'section', 'vdom', 'object_type',
-            'object', 'fields', 'note', 'error', 'key',
+            'object', 'fields', 'note', 'error', 'dry_run', 'key',
         )
         default_columns = (
             'pk', 'label', 'action', 'decision', 'outcome', 'section', 'vdom', 'object', 'fields', 'note', 'error',
+            'dry_run',
         )

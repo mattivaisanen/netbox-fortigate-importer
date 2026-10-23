@@ -6,16 +6,14 @@ what would change, try it with a dry run, apply it, and roll it back if
 needed. Later imports of the same firewall are delta syncs: changed and
 deleted objects wait for a person to decide.
 
-> 0.1.0 is the first release. Read its known issues in the
-> [release notes](https://github.com/mattivaisanen/netbox-fortigate-importer/releases/tag/v0.1.0)
-> before you let people import who should not be able to edit everything:
-> applying does not yet check the applying user's NetBox permissions.
-
 ## How an import works
 
 1. **Upload** under *FortiGate → New import*: drop the file on the page.
    An encrypted backup asks for its password.
-2. **Match**: the firewall is found by serial number or hostname. The
+2. **Match**: the firewall is found by its serial number, or by its
+   hostname when exactly one FortiGate has it and no serial number says
+   otherwise. When several FortiGates share the hostname, you choose (the
+   matches are suggested). The
    first time, you choose its NetBox device, or ask for a new one. A new
    device is not created yet: it is one of the changes in the plan, written
    on apply and removed again by a rollback.

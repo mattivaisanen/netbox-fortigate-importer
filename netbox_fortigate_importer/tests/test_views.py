@@ -175,6 +175,36 @@ class ViewTest(ViewBase):
         temp.assert_not_called()
         self.assertTrue(ImportRun.objects.exists())
 
+    def test_error_reports_hide_the_file_and_password(self):
+        import sys
+
+        from django.test import RequestFactory
+        from django.views.debug import ExceptionReporter
+
+        from netbox_fortigate_importer.views import ImportRunUploadView
+
+        # Made at run time (the report quotes this test's source lines) and
+        # kept off this frame's local variables (the report lists them too).
+        import uuid
+
+        self.marks = (uuid.uuid4().hex, uuid.uuid4().hex)
+        request = RequestFactory().post(reverse(URL + 'importrun_upload'), {
+            'file': SimpleUploadedFile('b.conf', BRANCH.read_text().replace('BRANCH1-FW01', self.marks[1]).encode()),
+            'password': self.marks[0],
+        })
+        request.user = self.user
+        request._dont_enforce_csrf_checks = True
+        with mock.patch('netbox_fortigate_importer.services.load', side_effect=RuntimeError('boom')):
+            try:
+                ImportRunUploadView.as_view()(request)
+            except RuntimeError:
+                report = ExceptionReporter(request, *sys.exc_info()).get_traceback_html()
+            else:
+                self.fail('the error was not raised')
+        self.assertIn('boom', report)
+        self.assertNotIn(self.marks[0], report, 'the password')
+        self.assertNotIn(self.marks[1], report, 'the configuration text')
+
     def test_not_a_configuration(self):
         response = self.upload(b'\x00\x01\x02binary', name='photo.jpg')
         self.assertEqual(response.status_code, 400)
@@ -206,6 +236,21 @@ class ViewTest(ViewBase):
         self.assertFalse(run.changes.filter(section='interface').exclude(action=ActionChoices.NOOP)
                          .exclude(decision=DecisionChoices.APPROVED).exists())
         self.assertEqual(self.client.get(change.get_absolute_url()).status_code, 200)
+
+    def test_decisions_clear_the_dry_run_and_stay_on_this_site(self):
+        device = Device.objects.create(name='b1', site=self.site, device_type=self.device_type, role=self.role)
+        FortiGateBinding.objects.create(name='Branch', device=device, serial='FGT60FTK21005678')
+        self.upload(read(BRANCH))
+        run = ImportRun.objects.get()
+        ImportRun.objects.filter(pk=run.pk).update(dry_run={'counts': {'applied': 1}})
+        change = run.changes.get(key='interface/wan1')
+        response = self.client.post(reverse(URL + 'importrun_decide', args=[run.pk]), {
+            'pk': [change.pk], 'decision': DecisionChoices.SKIPPED, 'scope': 'selected',
+            'return_url': 'https://evil.example/',
+        })
+        self.assertRedirects(response, run.get_absolute_url(), fetch_redirect_response=False)
+        run.refresh_from_db()
+        self.assertEqual(run.dry_run, {})
 
     def test_list_and_detail_pages(self):
         device = Device.objects.create(name='b1', site=self.site, device_type=self.device_type, role=self.role)
@@ -258,6 +303,30 @@ class APITest(ViewBase):
         response = self.client.post(url, {'file': SimpleUploadedFile('b.conf', content)})
         self.assertEqual(response.status_code, 400)
         self.assertTrue(response.json()['password_required'])
+
+
+    def test_run_actions_need_only_their_own_permission(self):
+        from users.models import ObjectPermission
+        from core.models import ObjectType
+
+        device = Device.objects.create(name='b1', site=self.site, device_type=self.device_type, role=self.role)
+        FortiGateBinding.objects.create(name='Branch', device=device, serial='FGT60FTK21005678')
+        self.upload(read(BRANCH))
+        run = ImportRun.objects.get()
+        user = get_user_model().objects.create(username='operator')
+        permission = ObjectPermission.objects.create(name='apply runs', actions=['view', 'apply'])
+        permission.object_types.add(ObjectType.objects.get_for_model(ImportRun))
+        permission.users.add(user)
+        self.client.force_login(user)
+        url = reverse('plugins-api:netbox_fortigate_importer-api:importrun-dry-run', args=[run.pk])
+        with mock.patch('netbox_fortigate_importer.jobs.ImportRunJob.enqueue') as enqueue:
+            enqueue.return_value.pk = 1
+            enqueue.return_value.get_absolute_url.return_value = '/'
+            response = self.client.post(url)
+        self.assertEqual(response.status_code, 202, response.content)
+        response = self.client.post(reverse('plugins-api:netbox_fortigate_importer-api:importrun-rollback',
+                                            args=[run.pk]))
+        self.assertEqual(response.status_code, 403, response.content)
 
 
 class JobTest(ViewBase):

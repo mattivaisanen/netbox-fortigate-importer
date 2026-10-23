@@ -93,17 +93,18 @@ def extract(result: ParseResult):
             'not_imported': _unused_tables(result, config_layout),
         },
         'warnings': warnings,
+        'truncated': result.truncated,
     }
 
 
-def load(data, password=None):
+def load(data, password=None, max_size=None):
     """
     Bytes of an uploaded file to the importer document, in one step. Raises
     the parser's errors (PasswordRequired, DecryptionError, UnsupportedFormat,
     ParseError) unchanged. The text and the parse tree are dropped when this
     returns.
     """
-    text = read_config_bytes(data, password)
+    text = read_config_bytes(data, password, **({'max_size': max_size} if max_size else {}))
     try:
         return extract(parse(text))
     finally:

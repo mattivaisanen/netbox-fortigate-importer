@@ -6,13 +6,20 @@ How the importer works and why, for anyone changing it.
 
 1. **Bytes to text** (`parser/files.py`): plain, gzip or encrypted
    (`#FGBK|` header, AES-256-GCM, key = SHA-256 of the password, gzip
-   inside). In memory only.
+   inside). In memory only. Decompression streams and stops at
+   `max_size` (ten times `max_upload_mb`), so a small "zip bomb" can't
+   exhaust memory. `services.ingest` is `@sensitive_variables()` and the
+   upload views mark `password` sensitive, so Django's error reports never
+   show the file, its text or the password.
 2. **Text to tree** (`parser/cli.py`): a shell-like tokenizer (quoted and
    bare parts join, backslash escapes, multi-line quoted values) and a
    stack machine for `config` / `edit` / `set` / `next` / `end`, plus the
    script commands `rename`, `move`, `clone`, `delete`, `purge`, `append`,
-   `select`, `unselect`. A stray quote is closed at the end of its line when
-   the next line is a CLI command, so one typo can't swallow the file.
+   `select`, `unselect`. A quote left open at a line end starts a multi-line
+   value only if a later quote closes it at the end of its line (scripts,
+   certificates); otherwise it is a typo and is closed at the end of its own
+   line, so one stray quote can't swallow the file and script lines are
+   never read as configuration.
 3. **Secrets out** (`parser/secrets.py`): checked for every `set` while
    parsing; flagged values never enter the tree. Only a count is kept.
 4. **Layout** (`parser/layout.py`): header facts (model, firmware, VDOM
@@ -50,7 +57,15 @@ and with all of them installed.
    next import of the same file doesn't ask again.
 9. **Apply** (`applier.py`): one NetBox request ID, run as the user who
    pressed Apply through `apply_request_processors()` (change log,
-   webhooks, approval plugins), removals first in reverse order, then
+   webhooks, approval plugins), with that user's permissions (`may()` /
+   `require()`: model permission before, constraints before and after each
+   write, like NetBox's views; NetBox itself only checks in views and the
+   API). The run and its FortiGate are locked (`select_for_update`) for
+   the whole apply, so a re-plan, a decision or another apply or rollback
+   of the same FortiGate waits and then refuses; the job carries the plan
+   time the user saw and refuses a plan made again. Plan, decisions and
+   discard refuse while a job of the run is queued or running
+   (`jobs.busy()`). Removals first in reverse order, then
    writes in plan order, then the "deferred" fields (primary IP, virtual
    chassis master) once everything exists. Each item has its own savepoint
    and goes through `full_clean()` + `save()`. Before an object is written
@@ -58,11 +73,17 @@ and with all of them installed.
    again"). By default one failure rolls the whole apply back. Events
    queued by a failed item are taken out of NetBox's event queue so no
    webhook fires for something that was rolled back. A dry run is the
-   same with a rollback at the end.
+   same with a rollback at the end. A delete fails when Django's
+   `Collector` finds that it would also delete something the same apply
+   does not delete (an IP someone added to an imported interface).
 10. **Rollback** (`rollback.py`): the change log entries of the apply's
     request ID, newest first: creates deleted, updates and deletes
     restored from `prechange_data` with `deserialize_object()`. Refused
-    when any of those objects has a later change log entry. The import tag
+    when any of those objects has a later change log entry, or when
+    deleting a created object would cascade to anything the import did not
+    create (`cascade_victims()`), or when the change log no longer has the
+    entries of the objects the apply created (retention). Changes approved
+    later by their approver are not undone, so their records stay. The import tag
     and change-approval's own records are left alone.
 
 ## Ownership rules
@@ -79,6 +100,22 @@ and with all of them installed.
 - **Partial** objects (the bound device) are never created or deleted;
   the importer owns only its platform, serial, config context key
   `fortigate`, virtual chassis fields and primary IPv4.
+- **Not taken over:** an existing object assigned to another device or VM
+  (an IP on another firewall's interface), or one another FortiGate
+  manages, is never adopted; it is left out with a note
+  (`Planner.assigned_elsewhere()`). Creating a duplicate would fail
+  NetBox's `ENFORCE_GLOBAL_UNIQUE`.
+- **Adopted objects are only released:** `@meta.adopted` marks objects
+  that existed before the importer took them over; a removal stops
+  managing them instead of deleting.
+- **Nothing removed from an incomplete file:** when the parser reports a
+  truncated file (`ParseResult.truncated`, saved as `data['truncated']`), or a VDOM of a managed object is missing, the plan holds
+  those removals back with a note.
+- **Decisions survive re-planning** for rows whose action, values and diff
+  are unchanged (`carry_decisions()`).
+- **Text is text:** configuration strings that look like reference tokens
+  (`$ref:...`) are escaped with an extra `$` in the plan and unescaped when
+  written (`escape_literals()`).
 
 ## NetBox objects
 
@@ -184,6 +221,30 @@ rollback) and unlinks the device in `detach_device()` before deleting it;
 approval plugin the device may be created later than the apply:
 `planner.attach_created_device()` links it on the next plan.
 
+## Reviewing with dependencies
+
+Every planned change stores the keys it refers to (`depends_on`, from the
+`Ref`s in its desired values). `dependencies.py` follows them: approving a
+change whose prerequisites are creates that stay unapproved shows
+`importrun_dependencies.html` ("approve them too" or "only my selection"),
+and skipping one warns about approved changes that need it. A prerequisite
+that already exists in NetBox (adopt, update, conflict, no change) needs no
+approval: the applier resolves it by its pk. When an item is skipped at
+apply time because a prerequisite is missing, `Applier.unresolved_text`
+names that change and why it was not written.
+
+Dry-run results live in `ImportRun.dry_run['items']` (by key), not on the
+changes, so the change list reads them through the `dry_run` filter and
+the table's `dry_run` column.
+
+## Job errors
+
+`jobs.enqueue()` turns any failure to queue a job (database, Redis) into
+`QueueError`, shown as a message (503 in the API). `jobs.workers_running()`
+asks Redis whether an RQ worker runs, so the run page can warn while a job
+waits for a worker that isn't there. A job that raises writes
+"<Action> did not run: <error>" to `ImportRun.error`.
+
 ## Uploads
 
 `views.InMemoryUploadHandler` replaces Django's upload handlers for the
@@ -213,12 +274,16 @@ the user, so change-approval decides like for any edit:
   the item applied and confirms the record; rejected or withdrawn marks it
   rejected and restores the record, so the next import proposes it again.
 - Rollback withdraws the run's pending requests.
-- Dry runs don't go through change-approval.
+- Dry runs go through the gate too, so they show what would wait for
+  approval; the change set is not submitted and everything rolls back
+  (change-approval only notifies after commit).
 
 ## Tests
 
 `tests/test_parser.py` (no database), `tests/test_apply.py` (plan, apply,
 delta, conflicts, drift, rollback, two firewalls), `tests/test_views.py`
-(upload, password prompt, memory-only upload, review, API, jobs) and
+(upload, password prompt, memory-only upload, review, API, jobs),
+`tests/test_safety.py` (permissions, cascades, locking, matching),
+`tests/test_review.py` (dependency prompts, dry-run results, job errors) and
 `tests/test_change_approval.py`, `tests/test_security.py` and
 `tests/test_routing.py` (skipped unless the plugin is installed).

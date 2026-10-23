@@ -282,6 +282,26 @@ class NativeMapper:
                 lookup={'group': Ref('vlan-group'), 'vid': vid},
             ))
 
+    def note_other_interfaces(self, names):
+        """
+        Interfaces the device has that the configuration doesn't (often from
+        a device type whose names differ from FortiOS's): they are left alone
+        and the FortiGate's own interfaces are created next to them.
+        """
+        ctx = self.ctx
+        if not ctx.device_exists:
+            return
+        managed = ctx.binding.managed_objects.filter(key__startswith='interface/').values_list('object_id', flat=True)
+        others = sorted(
+            self.m['interface'].objects.filter(device=ctx.device).exclude(name__in=names)
+            .exclude(pk__in=list(managed)).values_list('name', flat=True)
+        )
+        if others:
+            shown = ', '.join(others[:8]) + (', …' if len(others) > 8 else '')
+            ctx.note(f'{ctx.device} has {len(others)} interfaces that are not in the configuration ({shown}). '
+                     f'They are left as they are; the FortiGate\'s interfaces are created by their own names. '
+                     f'If these are the same ports under other names, rename them in NetBox and plan again.')
+
     def interface_objects(self):
         ctx = self.ctx
         is_vm = ctx.info.get('is_vm')
@@ -302,6 +322,7 @@ class NativeMapper:
                         'bridge': None, 'vrf': None, 'vrrp': [], 'allowaccess': [],
                     }
                     names.append(p1['name'])
+        self.note_other_interfaces(names)
         for name in names:
             item = self.interfaces[name]
             kind = item['kind']

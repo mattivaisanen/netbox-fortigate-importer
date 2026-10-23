@@ -107,3 +107,17 @@ class RoutingImportTest(ImportTestCase):
         for model in (m.StaticRoute, m.PrefixList, m.RouteMap, m.BGPRouter, m.BGPPeer, m.OSPFInstance,
                       m.OSPFArea, m.Community, m.CustomPrefix):
             self.assertFalse(model.objects.exists(), model.__name__)
+
+    def test_unreadable_prefix_never_widens_a_list(self):
+        data = data_of(HQ)
+        rules = next(p for p in data['vdoms']['root']['prefix_lists'] if p['name'] == 'PL-HQ-OUT')['rules']
+        rules[0]['prefix'] = None  # a permit: left out
+        rules.append({'id': 3, 'action': 'deny', 'prefix': None, 'ge': None, 'le': None})  # deny: denies all
+        run = self.plan(self.make_binding(), data)
+        keys = set(run.changes.values_list('key', flat=True))
+        entries = [k for k in keys if 'prefix-list/PL-HQ-OUT/' in k]
+        self.assertEqual(sorted(e.rsplit('/', 1)[1] for e in entries), ['2', '3'])
+        deny = run.changes.get(key=next(e for e in entries if e.endswith('/3')))
+        self.assertIsNone(deny.proposed['fields']['assigned_prefix_id'])
+        self.assertEqual(deny.proposed['fields']['action'], 'deny')
+        self.assertTrue(any('cannot be read' in n for n in run.summary['notes']))

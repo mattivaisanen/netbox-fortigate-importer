@@ -10,12 +10,20 @@ from __future__ import annotations
 import hashlib
 
 from django.db.models import Q
+from django.views.decorators.debug import sensitive_variables
 
 from .extract import load
 from .models import FortiGateBinding, ImportRun, RunStatusChoices
 from .parser.files import is_encrypted
 
 
+#: How much larger than the upload limit a compressed file may grow.
+INFLATE_FACTOR = 10
+
+
+# Every local variable from here down (file bytes, text, password) is left
+# out of Django's error pages and error e-mails if something fails.
+@sensitive_variables()
 def ingest(data: bytes, filename, user, password=None):
     """
     Parse an upload and save it as a new run. Raises the parser's errors
@@ -25,7 +33,10 @@ def ingest(data: bytes, filename, user, password=None):
     digest = hashlib.sha256(data).hexdigest()
     size = len(data)
     encrypted = is_encrypted(data)
-    document = load(data, password)
+    from .settings import get_setting
+
+    max_size = int(get_setting('max_upload_mb') or 50) * 1024 * 1024 * INFLATE_FACTOR
+    document = load(data, password, max_size=max_size)
     del data
     run = ImportRun(
         filename=(filename or '')[:255], file_sha256=digest, file_size=size, encrypted=encrypted,
@@ -37,31 +48,48 @@ def ingest(data: bytes, filename, user, password=None):
 
 
 def find_binding(info):
-    """The FortiGate a configuration belongs to: same serial, else same hostname."""
+    """
+    The FortiGate a configuration belongs to: same serial number, else the
+    only FortiGate with the same hostname (and no other serial number).
+    With none or several, the user chooses on the device choice page.
+    """
     serial = info.get('serial')
     if serial:
         binding = FortiGateBinding.objects.filter(serial=serial).first()
         if binding:
             return binding
+    if not info.get('hostname'):
+        return None
+    found = list(bindings_by_hostname(info)[:2])
+    return found[0] if len(found) == 1 else None
+
+
+def bindings_by_hostname(info):
+    """FortiGates with this configuration's hostname whose serial does not contradict it."""
     hostname = info.get('hostname')
-    if hostname:
-        found = list(FortiGateBinding.objects.filter(Q(hostname__iexact=hostname) | Q(name__iexact=hostname))[:2])
-        if len(found) == 1:
-            return found[0]
-    return None
+    if not hostname:
+        return FortiGateBinding.objects.none()
+    found = FortiGateBinding.objects.filter(Q(hostname__iexact=hostname) | Q(name__iexact=hostname))
+    serial = info.get('serial')
+    if serial:
+        found = found.filter(Q(serial='') | Q(serial=serial))
+    return found
 
 
-def candidate_devices(info, limit=10):
-    """NetBox devices that look like this firewall: serial, then name."""
+def candidate_devices(info, user=None, limit=10):
+    """NetBox devices that look like this firewall (and `user` may see): serial, then name."""
     from dcim.models import Device
 
+    devices = Device.objects.restrict(user, 'view') if user is not None else Device.objects.all()
     found = []
     serial = info.get('serial')
     if serial:
-        found += list(Device.objects.filter(serial__iexact=serial)[:limit])
+        found += list(devices.filter(serial__iexact=serial)[:limit])
+    bound = bindings_by_hostname(info).exclude(device__isnull=True).values_list('device', flat=True)
+    found += list(devices.filter(pk__in=list(bound)).exclude(pk__in=[d.pk for d in found])[:limit])
     hostname = info.get('hostname')
     if hostname:
-        found += list(Device.objects.filter(name__iexact=hostname).exclude(pk__in=[d.pk for d in found])[:limit])
+        found += list(devices.filter(name__iexact=hostname).exclude(pk__in=[d.pk for d in found])[:limit])
     return found[:limit]
 
 

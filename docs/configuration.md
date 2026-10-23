@@ -12,7 +12,7 @@ PLUGINS_CONFIG = {
 
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
-| `max_upload_mb` | int | `50` | Largest configuration file accepted, in megabytes. Files are held in memory only. |
+| `max_upload_mb` | int | `50` | Largest configuration file accepted, in megabytes. Files are held in memory only. A compressed file may unpack to at most ten times this. |
 | `auto_approve_creates` | bool | `True` | New objects start approved in the review. Changes and deletes always wait for a person. |
 | `vrf_per_vdom` | bool | `True` | In multi-VDOM configurations, put each VDOM in its own VRF, named `<FortiGate> <vdom>`. VDOMs often reuse the same subnets, which NetBox's global uniqueness check refuses without VRFs. FortiOS VRF numbers inside a VDOM always get their own VRF. |
 | `create_connected_prefixes` | bool | `True` | Create prefixes for the networks on the firewall's interfaces. |
@@ -37,5 +37,10 @@ FortiGate's `options`), as is the RIR used for new ASNs.
 | `netbox_fortigate_importer.rollback_importrun` | Rolling back |
 | `netbox_fortigate_importer.add_fortigatebinding` | Linking a configuration to a device, or to a new device (which the apply creates) |
 
-Applying writes NetBox objects as the user who applied the run; with
-netbox-change-approval installed, its approval rules apply to those writes.
+Applying writes NetBox objects as the user who applied the run, with that
+user's NetBox permissions: each object needs the add, change or delete
+permission on its model, and permission constraints (for example "only
+these sites") are checked before and after the write, like a form. An item
+the user may not write fails with a message. Rollback checks the rolling
+back user the same way. With netbox-change-approval installed, its approval
+rules apply to those writes too.

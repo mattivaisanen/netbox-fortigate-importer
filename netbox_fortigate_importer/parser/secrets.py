@@ -20,7 +20,8 @@ SECRET_KEYS = frozenset({
     'pin', 'otp', 'two-factor-password', 'fortitoken-cloud-password',
     'auth-code', 'psk', 'login-passwd', 'n-mhae-key', 'inter-controller-key',
     'certificate-key', 'client-secret', 'oauth-client-secret', 'token-secret',
-    'mpsk-key', 'ipsec-psk', 'remote-auth-key',
+    'mpsk-key', 'ipsec-psk', 'remote-auth-key', 'keytab', 'auth-string', 'access-key',
+    'key-string', 'token', 'secret-key', 'auth-token',
 })
 
 #: Key fragments that mark a secret ("admin-password", "snmp-auth-pwd", ...).

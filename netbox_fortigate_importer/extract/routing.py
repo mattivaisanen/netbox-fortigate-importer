@@ -150,7 +150,9 @@ def prefix_lists(vdom, family=4):
         rules = []
         for rule_id, rule in entry.table('rule'):
             tokens = rule.get_list(key)
-            prefix = 'any' if tokens and tokens[0] == 'any' else pairs_to_prefix(tokens)
+            # No prefix is FortiOS's default, "any". One that can't be read
+            # stays None, and the mapper skips the list rather than widen it.
+            prefix = 'any' if not tokens or tokens[0] == 'any' else pairs_to_prefix(tokens)
             rules.append({
                 'id': int_or_none(rule_id),
                 'action': rule.get('action', 'permit'),
@@ -170,7 +172,9 @@ def access_lists(vdom, family=4):
         rules = []
         for rule_id, rule in entry.table('rule'):
             tokens = rule.get_list(key)
-            prefix = 'any' if tokens and tokens[0] == 'any' else pairs_to_prefix(tokens)
+            # No prefix is FortiOS's default, "any". One that can't be read
+            # stays None, and the mapper skips the list rather than widen it.
+            prefix = 'any' if not tokens or tokens[0] == 'any' else pairs_to_prefix(tokens)
             rules.append({
                 'id': int_or_none(rule_id),
                 'action': rule.get('action', 'permit'),

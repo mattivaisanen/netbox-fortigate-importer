@@ -2,6 +2,87 @@
 
 ## Unreleased
 
+## 0.2.0 (2026-10-23)
+
+New:
+
+- Approving a change that needs other changes (an IP address needs its
+  interface, a route its VRF) asks whether to approve those too. Skipping a
+  change warns about approved changes that need it. A change's page lists
+  what it needs by name, with their decisions.
+- A skipped item says which change it needed and why that one was not
+  written ("not reviewed yet", "skipped", or its error).
+- The last dry run's result shows on every change, and "Failed in dry run"
+  lists the changes that would fail.
+- The plan notes interfaces the device has but the configuration doesn't,
+  for example from a device type that names its ports differently.
+
+Fixed:
+
+- "See failing items" after a dry run showed every change instead of the
+  failing ones.
+- When NetBox cannot queue a dry run, apply or rollback (database or Redis
+  trouble), the page says so instead of showing a server error, and it
+  warns when no background worker is running to start the job. A job that
+  crashes leaves its error on the import's page.
+- The "Not imported" list is folded into one line of the configuration box.
+- The new or existing device choice shows proper radio buttons.
+
+- Scripts stored in a configuration (`system auto-script`, automation
+  actions) are kept as text. Before, their lines were read as configuration,
+  so a script that adds an address made the import propose that address.
+- A small compressed file that unpacks to a huge one is refused (limit:
+  ten times `max_upload_mb`) instead of filling the server's memory.
+- If reading a configuration fails unexpectedly, Django's error page and
+  error e-mails no longer show the file's text or the backup password.
+- Kerberos keytabs, RIP authentication strings, access keys and tokens are
+  dropped as secrets like passwords.
+- Uploads through the REST API with a browser session stay in memory too.
+- REST API plan, dry run, apply and rollback work for users who may apply or
+  roll back but not upload.
+- Apply and rollback respect the user's NetBox permissions. Before, a user
+  who could apply imports could create, change and delete any object
+  through an import, also on sites their permissions exclude. The device
+  choice only offers devices, sites and roles the user may see.
+- A configuration is no longer matched to another FortiGate by hostname
+  when their serial numbers differ. A hostname matches only when exactly
+  one FortiGate has it; otherwise the device choice page suggests the
+  matches and you choose.
+- Rollback refuses when deleting an imported object would also delete
+  later work, such as an IP address someone added to an imported interface.
+- Deleting an object the firewall no longer has fails, with a list, when it
+  would also delete objects the import does not delete; choose "stop
+  managing" or move them first.
+- While a dry run, apply or rollback is queued or running, the run cannot be
+  planned again, decided or discarded, and two imports of the same
+  FortiGate no longer apply at the same time.
+- Changing decisions clears the last dry run, which no longer matches.
+- The review page only returns to addresses on this NetBox after a decision.
+- A configuration that looks truncated (also when it has many other
+  warnings), or lacks VDOMs that earlier imports had, no longer proposes deleting what is missing; the plan says why.
+- IP addresses on another device, and DHCP ranges, reservations and VRRP
+  addresses another FortiGate manages, are no longer taken over (branches
+  that reuse the same subnets). They are left out with a note suggesting a
+  VRF per firewall.
+- An object that existed in NetBox before an import adopted it is kept
+  (only no longer managed) when the firewall drops it, instead of deleted.
+- Planning again keeps the review decisions of items that did not change.
+- Dry runs show what would wait for approval with netbox-change-approval.
+- Fields written last (primary IP, virtual chassis master) that were not
+  written, because the change waits for approval or failed with "keep going
+  past failed items", are proposed again by the next import instead of
+  being forgotten; the object itself stays managed.
+- Rollback refuses when NetBox's change log no longer has the import's
+  entries, instead of only forgetting the objects.
+- Rollback keeps tracking changes that were approved and applied later by
+  their approver (netbox-change-approval), and says so.
+- An approved "deprecate" stops managing the object, like a direct apply.
+- A prefix or access list rule whose prefix cannot be read no longer
+  matches everything: a permit is left out, a deny becomes "deny any".
+- Text in a configuration that starts with "$ref:" is written as text.
+- Changes to many-to-many fields alone (tagged VLANs, members) go through
+  full_clean() and carry the import's change log message.
+
 ## 0.1.0 (2026-10-23)
 
 New:

@@ -8,14 +8,18 @@ from django.urls import NoReverseMatch, reverse
 from django.utils.decorators import method_decorator
 from django.utils.translation import gettext as _
 from django.views.decorators.csrf import csrf_exempt, csrf_protect
+from django.views.decorators.debug import sensitive_post_parameters, sensitive_variables
 from django.views.generic import View
 
 from netbox.object_actions import AddObject, BulkDelete, BulkExport, DeleteObject, EditObject
 from netbox.views import generic
+from utilities.forms import restrict_form_fields
+from utilities.request import safe_for_redirect
 from utilities.views import ConditionalLoginRequiredMixin, register_model_view
 
-from . import filtersets, forms, planner, services, tables
-from .jobs import ImportRunJob, active_job
+from . import dependencies, filtersets, forms, planner, services, tables
+from . import jobs
+from .jobs import active_job
 from .mappers import MapperError
 from .models import (
     ActionChoices, DecisionChoices, FortiGateBinding, ImportRun, PlannedChange, RunStatusChoices,
@@ -122,12 +126,14 @@ class ImportRunUploadView(ConditionalLoginRequiredMixin, View):
             'form': forms.UploadForm(), 'max_upload_mb': get_setting('max_upload_mb'),
         })
 
+    @method_decorator(sensitive_post_parameters('password'))
     def post(self, request):
         # Replace the upload handlers before anything reads the body (CSRF
         # included, hence csrf_exempt here and csrf_protect inside).
         request.upload_handlers = [InMemoryUploadHandler(request)]
         return csrf_protect(self._post)(request)
 
+    @method_decorator(sensitive_variables())
     def _post(self, request):
         if not request.user.has_perm('netbox_fortigate_importer.add_importrun'):
             raise PermissionDenied
@@ -198,20 +204,24 @@ class ImportRunView(generic.ObjectView):
         queryset = filterset.qs if filterset.is_valid() else changes
         if 'changed' not in request.GET:
             queryset = queryset.exclude(action=ActionChoices.NOOP)
+        job = active_job(instance)
         can_decide = instance.status == RunStatusChoices.PLANNED and \
             request.user.has_perm('netbox_fortigate_importer.change_plannedchange')
-        table = tables.PlannedChangeTable(queryset)
+        table = tables.PlannedChangeTable(queryset, dry_run=instance.dry_run)
         if can_decide:
             # Checkboxes, so single changes can be approved or skipped.
             table.columns.show('pk')
         table.configure(request)
+        if not (instance.dry_run or {}).get('items'):
+            table.columns.hide('dry_run')
         summary = instance.summary or {}
         return {
             'changes_table': table,
             'summary': summary,
             'action_counts': [(value, label, color, summary.get('actions', {}).get(value, 0))
                               for value, label, color in ActionChoices.CHOICES],
-            'active_job': active_job(instance),
+            'active_job': job,
+            'no_worker': NO_WORKER if job and job.status == 'pending' and jobs.workers_running() is False else '',
             'can_apply': instance.can_apply and request.user.has_perm('netbox_fortigate_importer.apply_importrun'),
             'can_rollback': instance.can_rollback and
             request.user.has_perm('netbox_fortigate_importer.rollback_importrun'),
@@ -237,7 +247,7 @@ class _RunActionView(ConditionalLoginRequiredMixin, View):
     permission = None
 
     def get_run(self, request, pk):
-        run = get_object_or_404(ImportRun, pk=pk)
+        run = get_object_or_404(ImportRun.objects.restrict(request.user, 'view'), pk=pk)
         if self.permission and not request.user.has_perm(self.permission):
             raise PermissionDenied
         return run
@@ -251,17 +261,24 @@ class ImportRunBindView(_RunActionView):
 
     def get(self, request, pk):
         run = self.get_run(request, pk)
-        candidates = services.candidate_devices(run.info)
+        candidates = services.candidate_devices(run.info, request.user)
         initial = {'name': run.info.get('hostname')}
         if candidates:
             initial['device'] = candidates[0]
-        return self.render(request, run, forms.BindForm(initial=initial), candidates)
+        return self.render(request, run, self.form(request, initial=initial), candidates)
+
+    @staticmethod
+    def form(request, *args, **kwargs):
+        """The form, offering only devices, sites, ... the user may see."""
+        form = forms.BindForm(*args, **kwargs)
+        restrict_form_fields(form, request.user)
+        return form
 
     def post(self, request, pk):
         run = self.get_run(request, pk)
-        form = forms.BindForm(request.POST)
+        form = self.form(request, request.POST)
         if not form.is_valid():
-            return self.render(request, run, form, services.candidate_devices(run.info))
+            return self.render(request, run, form, services.candidate_devices(run.info, request.user))
         data = form.cleaned_data
         try:
             with transaction.atomic():
@@ -272,7 +289,7 @@ class ImportRunBindView(_RunActionView):
                                              data.get('name'))
         except Exception as exc:  # noqa: BLE001 - shown on the form
             form.add_error(None, str(getattr(exc, 'messages', [exc])[0]))
-            return self.render(request, run, form, services.candidate_devices(run.info))
+            return self.render(request, run, form, services.candidate_devices(run.info, request.user))
         try:
             planner.plan(run)
         except (planner.PlanError, MapperError) as exc:
@@ -297,6 +314,12 @@ class ImportRunPlanView(_RunActionView):
         return redirect(run.get_absolute_url())
 
 
+NO_WORKER = _(
+    'No NetBox background worker is running, so the job waits in the queue. Start it '
+    '(for netbox-docker: docker compose up -d netbox-worker) and the job runs.'
+)
+
+
 class _JobView(_RunActionView):
     action = None
     message = ''
@@ -312,8 +335,14 @@ class _JobView(_RunActionView):
             messages.error(request, _('Not possible while the run is "{status}".').format(
                 status=run.get_status_display()))
         else:
-            ImportRunJob.enqueue(instance=run, user=request.user, action=self.action)
-            messages.info(request, self.message)
+            try:
+                jobs.enqueue(run, request.user, self.action)
+            except jobs.QueueError as exc:
+                messages.error(request, str(exc))
+            else:
+                messages.info(request, self.message)
+                if jobs.workers_running() is False:
+                    messages.warning(request, NO_WORKER)
         return redirect(run.get_absolute_url())
 
 
@@ -347,7 +376,9 @@ class ImportRunDiscardView(_RunActionView):
 
     def post(self, request, pk):
         run = self.get_run(request, pk)
-        if run.status in (RunStatusChoices.PARSED, RunStatusChoices.PLANNED):
+        if jobs.busy(run):
+            messages.error(request, _('This run has a job queued or running.'))
+        elif run.status in (RunStatusChoices.PARSED, RunStatusChoices.PLANNED):
             run.status = RunStatusChoices.DISCARDED
             run.save(update_fields=['status'])
             messages.info(request, _('Run discarded. Nothing was written to NetBox.'))
@@ -361,8 +392,9 @@ class ImportRunDecideView(_RunActionView):
 
     def post(self, request, pk):
         run = self.get_run(request, pk)
-        if run.status != RunStatusChoices.PLANNED:
-            messages.error(request, _('Decisions can only change while the run is ready for review.'))
+        if run.status != RunStatusChoices.PLANNED or jobs.busy(run):
+            messages.error(request, _('Decisions can only change while the run is ready for review '
+                                      'and no job of it is queued or running.'))
             return redirect(run.get_absolute_url())
         decision = request.POST.get('decision')
         labels = {value: label for value, label, *_ in DecisionChoices.CHOICES}
@@ -383,10 +415,43 @@ class ImportRunDecideView(_RunActionView):
             changes = changes.filter(pk__in=request.POST.getlist('pk'))
         if decision == DecisionChoices.KEEP_NETBOX:
             changes = changes.filter(action=ActionChoices.CONFLICT)
-        count = changes.update(decision=decision, decided_by=request.user)
+        return_url = request.POST.get('return_url')
+        if not return_url or not safe_for_redirect(return_url):
+            return_url = run.get_absolute_url()
+        selected = list(changes.values_list('pk', flat=True))
+        if decision == DecisionChoices.APPROVED:
+            # Approving a change whose prerequisites stay unapproved would
+            # only get it skipped at apply time: ask first.
+            missing = dependencies.missing_for(run, selected)
+            choice = request.POST.get('dependencies')
+            if missing and choice not in ('include', 'only'):
+                return render(request, 'netbox_fortigate_importer/importrun_dependencies.html', {
+                    'object': run, 'selected': run.changes.filter(pk__in=selected), 'missing': missing,
+                    'selected_pks': selected, 'return_url': return_url,
+                })
+            if missing and choice == 'include':
+                selected += [row.pk for row in missing]
+                changes = run.changes.filter(pk__in=selected)
+        with transaction.atomic():
+            # Waits for an apply that holds the run, then sees its job.
+            locked = ImportRun.objects.select_for_update().get(pk=run.pk)
+            if locked.status != RunStatusChoices.PLANNED or jobs.busy(locked):
+                messages.error(request, _('The run changed meanwhile; nothing was decided.'))
+                return redirect(run.get_absolute_url())
+            count = changes.update(decision=decision, decided_by=request.user)
+            if count:
+                # The last dry run was for other decisions.
+                ImportRun.objects.filter(pk=run.pk).update(dry_run={})
         messages.success(request, _('{count} changes set to "{decision}".').format(
             count=count, decision=labels[decision]))
-        return redirect(request.POST.get('return_url') or run.get_absolute_url())
+        if decision in (DecisionChoices.SKIPPED, DecisionChoices.PENDING):
+            affected = dependencies.dependents_of(run, selected)
+            if affected:
+                names = ', '.join(row.label for row in affected[:5]) + (' …' if len(affected) > 5 else '')
+                messages.warning(request, _(
+                    '{count} approved changes need these and will be skipped too unless you approve them '
+                    'again: {names}').format(count=len(affected), names=names))
+        return redirect(return_url)
 
 
 #
@@ -406,8 +471,15 @@ class PlannedChangeView(generic.ObjectView):
             'decisions': [(v, l) for v, l, *_ in DecisionChoices.CHOICES
                           if v != DecisionChoices.KEEP_NETBOX or instance.action == ActionChoices.CONFLICT],
             'dry_run': (instance.run.dry_run or {}).get('items', {}).get(instance.key),
+            'needs': self.needs(instance),
             'change_request_url': change_request_url(instance.change_request_id),
         }
+
+    @staticmethod
+    def needs(instance):
+        keys = instance.depends_on or []
+        rows = {row.key: row for row in instance.run.changes.filter(key__in=keys)}
+        return [(key, rows.get(key)) for key in keys]
 
 
 def change_request_url(pk):

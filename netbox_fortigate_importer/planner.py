@@ -29,7 +29,7 @@ from django.db import models, transaction
 from django.utils import timezone
 
 from .mappers import Context, collect
-from .mappers.base import Ref, model_label, normalize, read_field, read_m2m, snapshot, sort_values
+from .mappers.base import Ref, model_field, model_label, normalize, read_field, read_m2m, snapshot, sort_values
 from .models import ActionChoices, DecisionChoices, ImportRun, ManagedObject, PlannedChange, RunStatusChoices
 
 #: Key in ManagedObject.fields holding the importer's notes about the object.
@@ -224,7 +224,8 @@ class Planner:
         create = {}
         if obj is None:
             for name, value in (desired.lookup or {}).items():
-                if '__' not in name:
+                # Many-to-many lookups only find; the m2m values set them.
+                if '__' not in name and not model_field(desired.model, name).many_to_many:
                     create[name] = normalize(value)
             for name, value in desired.create_defaults.items():
                 create[name] = normalize(value)
@@ -365,12 +366,32 @@ def summarize(run, rows, notes):
     }
 
 
+def attach_created_device(binding):
+    """
+    A FortiGate whose new device was created later than its apply (an
+    approval plugin let it through): link that device now.
+    """
+    if binding.device_id is not None:
+        return
+    from dcim.models import Device
+
+    managed = binding.managed_objects.filter(key='device').select_related('object_type').first()
+    if managed is None or managed.object_type.model_class() is not Device:
+        return
+    device = Device.objects.filter(pk=managed.object_id).first()
+    if device is not None:
+        binding.snapshot()
+        binding.device = device
+        binding.save()
+
+
 def plan(run: ImportRun):
     """Build (or rebuild) the plan of a run. Returns the saved rows."""
     if run.binding_id is None:
         raise PlanError('Choose the NetBox device this configuration belongs to first.')
     if not run.is_idle or run.status not in (RunStatusChoices.PARSED, RunStatusChoices.PLANNED):
         raise PlanError(f'A run that is "{run.get_status_display()}" cannot be planned again.')
+    attach_created_device(run.binding)
     planner = Planner(run)
     ctx = Context(binding=run.binding, data=run.data, options=planner.options)
     desired = collect(ctx)

@@ -8,6 +8,7 @@ from django.urls import reverse
 
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Site
 
+from netbox_fortigate_importer import applier, rollback
 from netbox_fortigate_importer.models import (
     ActionChoices, DecisionChoices, FortiGateBinding, ImportRun, RunStatusChoices,
 )
@@ -62,9 +63,84 @@ class ViewTest(ViewBase):
         self.assertRedirects(response, run.get_absolute_url(), fetch_redirect_response=False)
         run.refresh_from_db()
         self.assertEqual(run.status, RunStatusChoices.PLANNED)
-        self.assertEqual(run.binding.device.name, 'branch1-fw01')
-        self.assertEqual(run.binding.device.device_type.model, 'FortiGate-60F')
         self.assertEqual(run.binding.serial, 'FGT60FTK21005678')
+        # Choosing "a new device" writes nothing to NetBox: the device is a
+        # planned change like the others.
+        self.assertIsNone(run.binding.device)
+        self.assertFalse(Device.objects.exists())
+        device_change = run.changes.get(key='device')
+        self.assertEqual(device_change.action, ActionChoices.CREATE)
+        self.assertEqual(device_change.label, 'Device branch1-fw01')
+        # The model's device type exists, so it is reused.
+        self.assertEqual(run.changes.get(key='device-type/fortigate-60f').action, ActionChoices.ADOPT)
+
+        run.changes.filter(decision=DecisionChoices.PENDING).update(decision=DecisionChoices.APPROVED)
+        applier.apply(run, self.user, dry_run=True)
+        self.assertFalse(Device.objects.exists(), 'a dry run writes nothing')
+        run.refresh_from_db()
+        self.assertIsNone(run.binding.device)
+
+        applier.apply(run, self.user)
+        run.refresh_from_db()
+        self.assertEqual(run.status, RunStatusChoices.APPLIED, run.error)
+        device = run.binding.device
+        self.assertEqual((device.name, device.site, device.role), ('branch1-fw01', self.site, self.role))
+        self.assertEqual(device.device_type, self.device_type)
+        self.assertEqual(device.serial, 'FGT60FTK21005678')
+        self.assertTrue(device.interfaces.filter(name='wan1').exists())
+
+        # Rollback removes the device again; the FortiGate keeps how to create it.
+        rollback.rollback(run, self.user)
+        run.refresh_from_db()
+        self.assertEqual(run.status, RunStatusChoices.ROLLED_BACK, run.error)
+        self.assertFalse(Device.objects.exists())
+        binding = FortiGateBinding.objects.get(pk=run.binding_id)
+        self.assertIsNone(binding.device)
+        self.assertEqual(binding.new_device['site'], self.site.pk)
+
+        # The next import of the same firewall plans the device again.
+        self.upload(read(BRANCH))
+        again = ImportRun.objects.latest('pk')
+        self.assertEqual(again.binding, binding)
+        self.assertEqual(again.changes.get(key='device').action, ActionChoices.CREATE)
+
+    def test_new_device_type_is_planned_too(self):
+        self.upload(read(BRANCH))
+        run = ImportRun.objects.get()
+        # A model NetBox has no device type for.
+        run.data['info']['model_name'] = 'FortiGate-61F'
+        run.save()
+        self.client.post(reverse(URL + 'importrun_bind', args=[run.pk]), {
+            'mode': 'new', 'site': self.site.pk, 'role': self.role.pk,
+        })
+        run.refresh_from_db()
+        self.assertEqual(DeviceType.objects.count(), 1)
+        self.assertEqual(run.changes.get(key='device-type/fortigate-61f').action, ActionChoices.CREATE)
+        run.changes.filter(decision=DecisionChoices.PENDING).update(decision=DecisionChoices.APPROVED)
+        applier.apply(run, self.user)
+        run.refresh_from_db()
+        self.assertEqual(run.status, RunStatusChoices.APPLIED, run.error)
+        self.assertEqual(run.binding.device.device_type.model, 'FortiGate-61F')
+        self.assertEqual(run.binding.device.device_type.manufacturer, self.manufacturer)
+        self.assertEqual(run.binding.device.name, 'BRANCH1-FW01')
+
+    def test_change_list_has_pages_and_checkboxes(self):
+        device = Device.objects.create(name='b1', site=self.site, device_type=self.device_type, role=self.role)
+        FortiGateBinding.objects.create(name='Branch', device=device, serial='FGT60FTK21005678')
+        self.upload(read(BRANCH))
+        run = ImportRun.objects.get()
+        shown = run.changes.exclude(action=ActionChoices.NOOP).count()
+        self.assertGreater(shown, 25)
+        page = self.client.get(run.get_absolute_url() + '?per_page=25')
+        self.assertContains(page, f'Showing 1-25 of {shown}')
+        self.assertContains(page, 'page=2')
+        self.assertContains(page, 'name="pk"', count=25)
+        page = self.client.get(run.get_absolute_url() + '?per_page=25&page=2')
+        self.assertContains(page, 'name="pk"', count=min(shown - 25, 25))
+        # Without the right to decide there is nothing to select.
+        run.status = RunStatusChoices.DISCARDED
+        run.save()
+        self.assertNotContains(self.client.get(run.get_absolute_url()), 'name="pk"')
 
     def test_known_firewall_goes_straight_to_the_plan(self):
         device = Device.objects.create(name='b1', site=self.site, device_type=self.device_type, role=self.role)

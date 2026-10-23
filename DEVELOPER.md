@@ -85,6 +85,7 @@ and with all of them installed.
 | FortiGate | NetBox |
 | --- | --- |
 | The firewall | its Device: platform FortiOS, serial, `local_context_data.fortigate`, primary IPv4 (management interface) |
+| A firewall NetBox does not have | a new Device (name, site, role from the device choice; a Fortinet DeviceType named after the model unless one was chosen) |
 | HA cluster | VirtualChassis named after the HA group, this device as master |
 | VDOM | VirtualDeviceContext; with `vrf_per_vdom`, a VRF per VDOM |
 | FortiOS VRF number | VRF `<name> <vdom> vrf<n>` |
@@ -97,9 +98,91 @@ and with all of them installed.
 | BGP AS | ASN (RIR from the FortiGate, or "Private" for private AS numbers) |
 | IPsec phase 1 / 2 | IKEProposal, IKEPolicy, IPSecProposal, IPSecPolicy, IPSecProfile, Tunnel, TunnelTermination on the tunnel interface with the outside IP |
 
+With netbox-security (`mappers/security.py`; its docstring has the full
+mapping):
+
+| FortiGate | netbox-security |
+| --- | --- |
+| address (subnet), VIP | Address on a CustomPrefix (not an IPAM prefix: firewall objects would fill IPAM with host routes); a VIP is its mapped address |
+| address (FQDN) | Address with a DNS name |
+| address (range) | AddressSet of the subnets covering the range exactly |
+| address group, VIP group | AddressSet (nested groups in `address_sets`) |
+| custom service, group | Application (protocols, single ports; wide ranges only described), ApplicationSet |
+| zone, interface named in a policy | SecurityZone + SecurityZoneAssignment per interface |
+| policy | SecurityZonePolicy per source x destination interface, `index` = position |
+| IP pool | NatPool + NatPoolMember (IPAM prefix, or IP range) |
+| VIP | destination NatRule (+ a NatPool for the mapped address) |
+| central SNAT / policy NAT | source NatRule; rule sets assigned to the device or VDC |
+
+Why some choices:
+
+- Names are scoped with `identifier` (`<FortiGate>` or `<FortiGate> <vdom>`);
+  NatPool and NatRuleSet have no identifier, so it starts their names.
+- Policies use one AddressList per address and side
+  (`all (source)`, `all (destination)`): netbox-security refuses a policy
+  whose source and destination share a list, which "all" to "all" would.
+- A zone used on both sides of a policy gets `allow_intra_zone`, which
+  netbox-security requires for such policies.
+- NAT rules point at IPAM objects (netbox-security's model). The mapper
+  reuses the core mapper's connected prefix under the same key, otherwise
+  finds or creates one, release-only. A range that overlaps another
+  NetBox range (NetBox refuses overlaps) is left out with a note.
+- A group inside a group gets a slightly higher write order so its members
+  exist first (the plan sorts by order, then key).
+
+With netbox-routing (`mappers/routing.py`; its docstring has the full
+mapping):
+
+| FortiGate | netbox-routing |
+| --- | --- |
+| static route | StaticRoute (device, VRF, next hop, interface next hop, distance as metric) |
+| prefix list, access list | PrefixList + PrefixListEntry on a netbox-routing CustomPrefix ("any" has none) |
+| AS path list | ASPath + ASPathEntry |
+| community list | CommunityList + CommunityListEntry; Community found or created (global) |
+| route map | RouteMap + RouteMapEntry; matches on lists link to them, other matches and sets go in the JSON fields |
+| BGP | BGPRouter per AS (on the device), BGPScope per VDOM VRF, BGPAddressFamily per IP version, BGPPeer + BGPPeerAddressFamily per neighbor, BGPPeerTemplate per neighbor group |
+| OSPF | OSPFInstance per VDOM, OSPFArea (global, found or created), OSPFInterface per interface a network covers |
+
+Why some choices:
+
+- PrefixList, RouteMap, ASPath and CommunityList names are unique across
+  NetBox, so their names start with `<FortiGate> [<vdom>]`.
+- Access lists become prefix lists: netbox-routing has no access lists,
+  and route maps match them by name. A non-exact rule gets `le 32`/`le 128`.
+- netbox-routing refuses an `le` not longer than the prefix (FortiGate's
+  `le 0` exact match: dropped) and, in the tested version, `ge` and `le`
+  together: `le` is left out with a note.
+- A BGP neighbor's address must be an IPAM IPAddress. The mapper reuses
+  an interface address the core mapper plans, otherwise finds or creates
+  one (release-only, shared: the other firewall's import may own it).
+  Remote AS numbers become ASNs with the same rules as the local one.
+- Planner: a many-to-many name in `lookup` (StaticRoute `devices`) only
+  filters; the `m2m` values set it on create.
+
 A tunnel between two FortiGates that are both imported is one Tunnel:
 its name is built from both public addresses, sorted, so the second
 firewall finds and joins the tunnel the first created.
+
+## A new device
+
+Choosing "a new device" writes nothing to NetBox. The FortiGate (binding)
+is saved without a device and with `new_device` (name, site, role, device
+type pks). While `binding.device` is empty, `Context.device` is
+`Ref('device')`, so every object that hangs on the device (interfaces,
+VDCs, routes) refers to the planned device like to any other planned
+object, and lookups that need it find nothing (they are creates).
+`NativeMapper.device()` then plans the device as a normal create (lookup
+name + site, so a device made in the meantime is adopted) and, without a
+chosen type, a release-only `device-type/<slug>`.
+
+The applier links the binding to the device as soon as it is created, in
+the same savepoint, so a dry run or a failed apply leaves the binding as it
+was. Rollback leaves the binding out of the change log replay (it is the
+importer's record; refreshing its firmware would otherwise block every
+rollback) and unlinks the device in `detach_device()` before deleting it;
+`new_device` stays, so the next import plans the device again. With an
+approval plugin the device may be created later than the apply:
+`planner.attach_created_device()` links it on the next plan.
 
 ## Uploads
 
@@ -137,4 +220,5 @@ the user, so change-approval decides like for any edit:
 `tests/test_parser.py` (no database), `tests/test_apply.py` (plan, apply,
 delta, conflicts, drift, rollback, two firewalls), `tests/test_views.py`
 (upload, password prompt, memory-only upload, review, API, jobs) and
-`tests/test_change_approval.py` (skipped unless installed).
+`tests/test_change_approval.py`, `tests/test_security.py` and
+`tests/test_routing.py` (skipped unless the plugin is installed).

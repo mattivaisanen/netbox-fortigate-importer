@@ -35,7 +35,7 @@ FortiGate's `options`), as is the RIR used for new ASNs.
 | `netbox_fortigate_importer.change_plannedchange` | Reviewing (approve, skip, keep NetBox) |
 | `netbox_fortigate_importer.apply_importrun` | Dry runs and applying |
 | `netbox_fortigate_importer.rollback_importrun` | Rolling back |
-| `netbox_fortigate_importer.add_fortigatebinding` | Linking a configuration to a device (and creating one) |
+| `netbox_fortigate_importer.add_fortigatebinding` | Linking a configuration to a device, or to a new device (which the apply creates) |
 
 Applying writes NetBox objects as the user who applied the run; with
 netbox-change-approval installed, its approval rules apply to those writes.

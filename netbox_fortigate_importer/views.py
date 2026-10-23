@@ -198,7 +198,12 @@ class ImportRunView(generic.ObjectView):
         queryset = filterset.qs if filterset.is_valid() else changes
         if 'changed' not in request.GET:
             queryset = queryset.exclude(action=ActionChoices.NOOP)
+        can_decide = instance.status == RunStatusChoices.PLANNED and \
+            request.user.has_perm('netbox_fortigate_importer.change_plannedchange')
         table = tables.PlannedChangeTable(queryset)
+        if can_decide:
+            # Checkboxes, so single changes can be approved or skipped.
+            table.columns.show('pk')
         table.configure(request)
         summary = instance.summary or {}
         return {
@@ -210,8 +215,7 @@ class ImportRunView(generic.ObjectView):
             'can_apply': instance.can_apply and request.user.has_perm('netbox_fortigate_importer.apply_importrun'),
             'can_rollback': instance.can_rollback and
             request.user.has_perm('netbox_fortigate_importer.rollback_importrun'),
-            'can_decide': instance.status == RunStatusChoices.PLANNED and
-            request.user.has_perm('netbox_fortigate_importer.change_plannedchange'),
+            'can_decide': can_decide,
             'sections': sorted({c for c in instance.changes.values_list('section', flat=True)}),
             'dry_run': instance.dry_run or {},
         }
@@ -262,11 +266,10 @@ class ImportRunBindView(_RunActionView):
         try:
             with transaction.atomic():
                 if data['mode'] == form.MODE_EXISTING:
-                    device = data['device']
+                    services.bind(run, data['device'])
                 else:
-                    device = services.create_device(run.info, data['site'], data['role'], data.get('device_type'),
-                                                    data.get('name'))
-                services.bind(run, device)
+                    services.bind_new_device(run, data['site'], data['role'], data.get('device_type'),
+                                             data.get('name'))
         except Exception as exc:  # noqa: BLE001 - shown on the form
             form.add_error(None, str(getattr(exc, 'messages', [exc])[0]))
             return self.render(request, run, form, services.candidate_devices(run.info))

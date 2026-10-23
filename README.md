@@ -6,15 +6,19 @@ what would change, try it with a dry run, apply it, and roll it back if
 needed. Later imports of the same firewall are delta syncs: changed and
 deleted objects wait for a person to decide.
 
-> Work in progress: core NetBox objects work end to end. netbox-security
-> and netbox-routing objects come next.
+> 0.1.0 is the first release. Read its known issues in the
+> [release notes](https://github.com/mattivaisanen/netbox-fortigate-importer/releases/tag/v0.1.0)
+> before you let people import who should not be able to edit everything:
+> applying does not yet check the applying user's NetBox permissions.
 
 ## How an import works
 
 1. **Upload** under *FortiGate → New import*: drop the file on the page.
    An encrypted backup asks for its password.
 2. **Match**: the firewall is found by serial number or hostname. The
-   first time, you choose its NetBox device or create one.
+   first time, you choose its NetBox device, or ask for a new one. A new
+   device is not created yet: it is one of the changes in the plan, written
+   on apply and removed again by a rollback.
 3. **Review** the plan: every object that would be created, changed,
    adopted (an existing NetBox object the importer starts managing) or
    removed, field by field. New objects start approved; changes, removals
@@ -52,6 +56,43 @@ the plan was made, nothing is applied until you plan again.
 - IPsec VPNs: IKE and IPsec proposals and policies, profiles, tunnels and
   terminations. A tunnel between two imported FortiGates is one tunnel
   with both ends.
+
+With [netbox-security](https://github.com/andy-shady-org/netbox-security)
+installed, also the firewall's rules:
+
+- Addresses (subnets, ranges, FQDNs), address groups, VIPs and VIP groups
+  as addresses and address sets, scoped to the firewall (and VDOM) with
+  netbox-security's identifier, so two FortiGates can both have "all".
+- Custom services and service groups as applications and application sets.
+- Zones, and interfaces that policies name directly, as security zones on
+  their interfaces.
+- Policies as security zone policies, in the firewall's order: one per
+  source and destination interface pair.
+- IP pools as NAT pools, VIPs as destination NAT rules, central SNAT or
+  policy NAT as source NAT rules, on the device (or its VDOM).
+
+With [netbox-routing](https://github.com/DanSheps/netbox-routing)
+installed, also its routing:
+
+- Static routes on the device, in the VDOM's VRF (blackhole and SD-WAN
+  routes too).
+- Prefix lists and access lists (as prefix lists), AS path lists,
+  community lists and route maps, linked to each other as on the firewall.
+  Their names start with the firewall (and VDOM), since netbox-routing
+  names are unique across NetBox.
+- BGP: a router per AS on the device, a scope per VDOM, the neighbors with
+  their route maps and prefix lists, and neighbor groups as peer templates.
+  Neighbor addresses are found in IPAM or created there.
+- OSPF: an instance per VDOM, its areas and the interfaces its networks
+  cover.
+
+BGP network statements, BGP BFD and OSPF costs have no netbox-routing
+field and are listed in the plan's notes. Passwords and keys are never
+imported.
+
+Country, MAC and dynamic addresses, excluded group members, negated
+fields, users and schedules have no netbox-security form: they are left
+out or written into the description, and the plan's notes list them.
 
 Every object it creates gets the tag `fortigate-import`.
 

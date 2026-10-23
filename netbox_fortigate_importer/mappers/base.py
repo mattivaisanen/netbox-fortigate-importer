@@ -47,6 +47,7 @@ MODEL_ORDER = {
     'dcim.platform': 11,
     'ipam.rir': 12,
     'ipam.role': 13,
+    'dcim.devicetype': 14,
     'ipam.vrf': 20,
     'ipam.asn': 21,
     'dcim.virtualchassis': 25,

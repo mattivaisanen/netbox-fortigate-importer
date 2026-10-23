@@ -75,13 +75,14 @@ class NativeMapper:
     """Builds the core NetBox objects. One instance per plan."""
 
     def __init__(self, ctx):
-        from dcim.models import Device, Interface, Manufacturer, Platform, VirtualChassis, VirtualDeviceContext
+        from dcim.models import Device, DeviceType, Interface, Manufacturer, Platform, VirtualChassis, \
+            VirtualDeviceContext
         from ipam.models import ASN, RIR, VLAN, VRF, FHRPGroup, FHRPGroupAssignment, IPAddress, IPRange, \
             Prefix, VLANGroup
 
         self.ctx = ctx
         self.m = {
-            'device': Device, 'interface': Interface, 'manufacturer': Manufacturer, 'platform': Platform,
+            'device': Device, 'devicetype': DeviceType, 'interface': Interface, 'manufacturer': Manufacturer, 'platform': Platform,
             'vc': VirtualChassis, 'vdc': VirtualDeviceContext, 'asn': ASN, 'rir': RIR, 'vlan': VLAN,
             'vrf': VRF, 'fhrp': FHRPGroup, 'fhrp_assignment': FHRPGroupAssignment, 'ip': IPAddress,
             'iprange': IPRange, 'prefix': Prefix, 'vlangroup': VLANGroup,
@@ -116,7 +117,7 @@ class NativeMapper:
         # A platform tied to a manufacturer only fits that manufacturer's
         # device types: tie FortiOS to Fortinet only when the device is one.
         create = {'name': 'FortiOS'}
-        if self.ctx.device.device_type.manufacturer.slug == 'fortinet':
+        if self.ctx.is_fortinet:
             self.add(Desired(
                 key='manufacturer/fortinet', model=self.m['manufacturer'], section='device', label='Fortinet',
                 lookup={'slug': 'fortinet'}, create_defaults={'name': 'Fortinet'}, release_only=True, shared=True,
@@ -157,10 +158,35 @@ class NativeMapper:
         primary = self.primary_ip_key()
         if primary:
             deferred['primary_ip4'] = Ref(primary)
+        if ctx.device_exists:
+            self.add(Desired(
+                key='device', model=self.m['device'], section='device', label=str(ctx.device),
+                fields=fields, deferred=deferred, partial=True, instance=ctx.device,
+            ))
+            return
+        # A firewall NetBox does not have yet: the device is created by the
+        # apply, like everything else, and removed again by a rollback.
+        new = ctx.new_device
+        device_type = new['device_type'] or self.device_type()
         self.add(Desired(
-            key='device', model=self.m['device'], section='device', label=str(ctx.device),
-            fields=fields, deferred=deferred, partial=True, instance=ctx.device,
+            key='device', model=self.m['device'], section='device', label=f'Device {new["name"]}',
+            fields=fields, deferred=deferred,
+            lookup={'name': new['name'], 'site': new['site']},
+            create_defaults={'role': new['role'], 'device_type': device_type, 'status': 'active'},
+            note='new device for this FortiGate',
         ))
+
+    def device_type(self):
+        """A Fortinet device type named after the model, found or created."""
+        model = self.ctx.info.get('model_name') or self.ctx.info.get('model_code') or 'FortiGate'
+        slug = slugify(model)[:100]
+        key = f'device-type/{slug}'
+        self.add(Desired(
+            key=key, model=self.m['devicetype'], section='device', label=f'Device type {model}',
+            lookup={'manufacturer': Ref('manufacturer/fortinet'), 'model__iexact': model},
+            create_defaults={'model': model, 'slug': slug}, release_only=True, shared=True,
+        ))
+        return Ref(key)
 
     def config_context(self):
         data = self.ctx.data
@@ -240,7 +266,7 @@ class NativeMapper:
             return
         ctx = self.ctx
         slug = slugify(f'{ctx.name}-vlans')[:100]
-        site = ctx.device.site
+        site = ctx.site
         self.add(Desired(
             key='vlan-group', model=self.m['vlangroup'], section='interface', label=f'VLAN group {ctx.name}',
             fields={'name': f'{ctx.name} VLANs', 'slug': slug},
@@ -387,7 +413,7 @@ class NativeMapper:
         ctx = self.ctx
         if not ctx.options.get('create_connected_prefixes'):
             return
-        site = ctx.device.site
+        site = ctx.site
         seen = set()
         for net in ctx.data.get('connected', []):
             vrf_key = ctx.vrf_key(net['vdom'], net.get('vrf'))

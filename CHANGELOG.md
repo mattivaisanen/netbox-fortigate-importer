@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.0 (2026-10-23)
+
 New:
 
 - Read FortiGate configuration files: plain, gzip-compressed and
@@ -12,10 +14,13 @@ New:
   API). Encrypted backups ask for their password, which is never saved.
   The file stays in memory and is never written to disk.
 - The firewall is matched to its NetBox device by serial number or
-  hostname, or you choose or create the device.
+  hostname, or you choose the device. A new device (and its device type)
+  is a change in the plan like any other: nothing is written before you
+  apply, and a rollback removes it again.
 - Review a plan of every change before anything is written: creates,
   updates, adoptions of existing objects, conflicts and removals, field by
-  field, with bulk approve / skip / keep NetBox.
+  field. The list has pages; select single changes or everything listed to
+  approve, skip or keep NetBox's value.
 - Imports the device's platform, serial number, primary IP and settings
   (config context), HA clusters (virtual chassis), VDOMs (virtual device
   contexts and VRFs), interfaces, VLANs, IP addresses, connected prefixes,

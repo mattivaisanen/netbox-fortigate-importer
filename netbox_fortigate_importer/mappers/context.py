@@ -19,7 +19,42 @@ class Context:
 
     @property
     def device(self):
-        return self.binding.device
+        """The bound device, or a reference to the device this import creates."""
+        return self.binding.device or Ref('device')
+
+    @property
+    def device_exists(self):
+        return self.binding.device_id is not None
+
+    @property
+    def new_device(self):
+        """How to create the device ({'name', 'site', ...} as objects), or {}."""
+        if self.device_exists:
+            return {}
+        if not hasattr(self, '_new_device'):
+            from dcim.models import DeviceRole, DeviceType, Site
+
+            spec = self.binding.new_device or {}
+            models = {'site': Site, 'role': DeviceRole, 'device_type': DeviceType}
+            found = {'name': spec.get('name') or self.info.get('hostname') or self.binding.name}
+            for name, model in models.items():
+                found[name] = model.objects.filter(pk=spec.get(name)).first() if spec.get(name) else None
+            self._new_device = found
+        return self._new_device
+
+    @property
+    def site(self):
+        return self.binding.device.site if self.device_exists else self.new_device['site']
+
+    @property
+    def device_type(self):
+        """The device's type, or None when the import creates a Fortinet one."""
+        return self.binding.device.device_type if self.device_exists else self.new_device['device_type']
+
+    @property
+    def is_fortinet(self):
+        device_type = self.device_type
+        return device_type is None or device_type.manufacturer.slug == 'fortinet'
 
     @property
     def info(self):

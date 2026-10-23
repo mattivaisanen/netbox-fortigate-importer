@@ -8,7 +8,7 @@
 {% block subtitle %}
   <div class="text-secondary d-flex flex-wrap align-items-center gap-2 mb-2">
     {% badge object.get_status_display bg_color=object.get_status_color %}
-    {% if object.binding %}<a href="{{ object.binding.get_absolute_url }}">{{ object.binding }}</a> &middot; {{ object.binding.device|linkify }}{% endif %}
+    {% if object.binding %}<a href="{{ object.binding.get_absolute_url }}">{{ object.binding }}</a> &middot; {{ object.binding.device|linkify|placeholder }}{% endif %}
     <span>{% blocktrans with who=object.created_by|default:_("unknown user") when=object.created|timesince %}uploaded by {{ who }}, {{ when }} ago{% endblocktrans %}</span>
     {% if object.encrypted %}<span class="badge text-bg-blue"><i class="mdi mdi-lock"></i> {% trans "encrypted backup" %}</span>{% endif %}
   </div>
@@ -182,6 +182,7 @@
     <div class="table-responsive">
       {% render_table changes_table 'inc/table.html' %}
     </div>
+    {% include 'inc/paginator.html' with table=changes_table paginator=changes_table.paginator page=changes_table.page %}
     {% if can_decide %}
     <div class="card-footer d-flex flex-wrap gap-2 align-items-center">
       <span class="text-muted small">{% trans "Selected" %}:</span>

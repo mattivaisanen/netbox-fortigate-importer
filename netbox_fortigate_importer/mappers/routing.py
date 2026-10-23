@@ -367,7 +367,7 @@ class VdomRouting:
         if not local_as:
             return
         device = self.ctx.device
-        device_type = ContentType.objects.get_for_model(type(device))
+        device_type = ContentType.objects.get_by_natural_key('dcim', 'device')
         router = f'rt/bgp/{bgp["as"]}'
         if not self.p.known(router):
             name = _text(f'{self.ctx.name} AS{bgp["as"]}', 100)

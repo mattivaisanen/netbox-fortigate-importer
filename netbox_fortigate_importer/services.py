@@ -104,23 +104,25 @@ def refresh_binding(binding, info):
         binding.save()
 
 
-def create_device(info, site, role, device_type=None, name=None):
-    """A new device for a configuration nobody has in NetBox yet."""
-    from dcim.models import Device, DeviceType, Manufacturer
-
-    if device_type is None:
-        manufacturer, _ = Manufacturer.objects.get_or_create(slug='fortinet', defaults={'name': 'Fortinet'})
-        model = info.get('model_name') or info.get('model_code') or 'FortiGate'
-        from django.utils.text import slugify
-
-        device_type = DeviceType.objects.filter(manufacturer=manufacturer, model__iexact=model).first()
-        if device_type is None:
-            device_type = DeviceType(manufacturer=manufacturer, model=model, slug=slugify(model)[:100])
-            device_type.full_clean()
-            device_type.save()
-    device = Device(
-        name=name or info.get('hostname') or None, site=site, role=role, device_type=device_type,
+def bind_new_device(run, site, role, device_type=None, name=None):
+    """
+    Link a run to a FortiGate NetBox does not have yet. Nothing is written
+    to NetBox here: the device becomes a planned "create" change of the run.
+    """
+    info = run.info or {}
+    name = (name or info.get('hostname') or '').strip() or None
+    binding = FortiGateBinding(
+        name=(name or info.get('serial') or 'FortiGate')[:100],
+        new_device={'name': name, 'site': site.pk, 'role': role.pk,
+                    'device_type': device_type.pk if device_type else None},
+        serial=info.get('serial') or '', hostname=info.get('hostname') or '',
+        model_code=info.get('model_code') or '', firmware=info.get('version') or '',
+        multi_vdom=bool(info.get('multi_vdom')),
     )
-    device.full_clean()
-    device.save()
-    return device
+    if FortiGateBinding.objects.filter(name=binding.name).exists():
+        binding.name = f'{binding.name} ({info.get("serial") or run.pk})'[:100]
+    binding.full_clean()
+    binding.save()
+    run.binding = binding
+    run.save(update_fields=['binding'])
+    return binding

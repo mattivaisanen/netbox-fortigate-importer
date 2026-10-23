@@ -571,9 +571,9 @@ class VdomMapper:
                  m2m={'source_zones': sorted(set(zones_from), key=lambda r: r.key),
                       'destination_zones': sorted(set(zones_to), key=lambda r: r.key)},
                  lookup={'name': name, 'nat_type': kind})
-        target = self.ctx.vdc_ref(self.vdom) or self.ctx.device
-        target_type = _ct(type(self.ctx.device)) if not isinstance(target, Ref) else \
-            ContentType.objects.get_by_natural_key('dcim', 'virtualdevicecontext')
+        vdc = self.ctx.vdc_ref(self.vdom)
+        target = vdc or self.ctx.device
+        target_type = ContentType.objects.get_by_natural_key('dcim', 'virtualdevicecontext' if vdc else 'device')
         self.new('natrulesetassignment', f'{key}/assignment', section='nat', label=f'NAT rule set {name} assignment',
                  fields={'ruleset': Ref(key), 'assigned_object_type': target_type, 'assigned_object_id': target},
                  lookup={'ruleset': Ref(key), 'assigned_object_type': target_type, 'assigned_object_id': target})

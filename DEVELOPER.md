@@ -85,6 +85,7 @@ and with all of them installed.
 | FortiGate | NetBox |
 | --- | --- |
 | The firewall | its Device: platform FortiOS, serial, `local_context_data.fortigate`, primary IPv4 (management interface) |
+| A firewall NetBox does not have | a new Device (name, site, role from the device choice; a Fortinet DeviceType named after the model unless one was chosen) |
 | HA cluster | VirtualChassis named after the HA group, this device as master |
 | VDOM | VirtualDeviceContext; with `vrf_per_vdom`, a VRF per VDOM |
 | FortiOS VRF number | VRF `<name> <vdom> vrf<n>` |
@@ -161,6 +162,27 @@ Why some choices:
 A tunnel between two FortiGates that are both imported is one Tunnel:
 its name is built from both public addresses, sorted, so the second
 firewall finds and joins the tunnel the first created.
+
+## A new device
+
+Choosing "a new device" writes nothing to NetBox. The FortiGate (binding)
+is saved without a device and with `new_device` (name, site, role, device
+type pks). While `binding.device` is empty, `Context.device` is
+`Ref('device')`, so every object that hangs on the device (interfaces,
+VDCs, routes) refers to the planned device like to any other planned
+object, and lookups that need it find nothing (they are creates).
+`NativeMapper.device()` then plans the device as a normal create (lookup
+name + site, so a device made in the meantime is adopted) and, without a
+chosen type, a release-only `device-type/<slug>`.
+
+The applier links the binding to the device as soon as it is created, in
+the same savepoint, so a dry run or a failed apply leaves the binding as it
+was. Rollback leaves the binding out of the change log replay (it is the
+importer's record; refreshing its firmware would otherwise block every
+rollback) and unlinks the device in `detach_device()` before deleting it;
+`new_device` stays, so the next import plans the device again. With an
+approval plugin the device may be created later than the apply:
+`planner.attach_created_device()` links it on the next plan.
 
 ## Uploads
 

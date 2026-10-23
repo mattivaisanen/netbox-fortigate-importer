@@ -366,12 +366,32 @@ def summarize(run, rows, notes):
     }
 
 
+def attach_created_device(binding):
+    """
+    A FortiGate whose new device was created later than its apply (an
+    approval plugin let it through): link that device now.
+    """
+    if binding.device_id is not None:
+        return
+    from dcim.models import Device
+
+    managed = binding.managed_objects.filter(key='device').select_related('object_type').first()
+    if managed is None or managed.object_type.model_class() is not Device:
+        return
+    device = Device.objects.filter(pk=managed.object_id).first()
+    if device is not None:
+        binding.snapshot()
+        binding.device = device
+        binding.save()
+
+
 def plan(run: ImportRun):
     """Build (or rebuild) the plan of a run. Returns the saved rows."""
     if run.binding_id is None:
         raise PlanError('Choose the NetBox device this configuration belongs to first.')
     if not run.is_idle or run.status not in (RunStatusChoices.PARSED, RunStatusChoices.PLANNED):
         raise PlanError(f'A run that is "{run.get_status_display()}" cannot be planned again.')
+    attach_created_device(run.binding)
     planner = Planner(run)
     ctx = Context(binding=run.binding, data=run.data, options=planner.options)
     desired = collect(ctx)

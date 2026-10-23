@@ -29,6 +29,7 @@
             {% render_field form.site %}
             {% render_field form.role %}
             {% render_field form.device_type %}
+            <p class="text-muted small">{% trans "Nothing is created yet: the new device is one of the changes in the plan, written when you apply it and removed again by a rollback." %}</p>
           </div>
           <div class="text-end">
             <a href="{{ object.get_absolute_url }}" class="btn btn-outline-secondary">{% trans "Cancel" %}</a>

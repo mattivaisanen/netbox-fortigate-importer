@@ -14,7 +14,9 @@ deleted objects wait for a person to decide.
 1. **Upload** under *FortiGate → New import*: drop the file on the page.
    An encrypted backup asks for its password.
 2. **Match**: the firewall is found by serial number or hostname. The
-   first time, you choose its NetBox device or create one.
+   first time, you choose its NetBox device, or ask for a new one. A new
+   device is not created yet: it is one of the changes in the plan, written
+   on apply and removed again by a rollback.
 3. **Review** the plan: every object that would be created, changed,
    adopted (an existing NetBox object the importer starts managing) or
    removed, field by field. New objects start approved; changes, removals

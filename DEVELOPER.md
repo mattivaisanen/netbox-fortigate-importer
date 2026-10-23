@@ -97,6 +97,38 @@ and with all of them installed.
 | BGP AS | ASN (RIR from the FortiGate, or "Private" for private AS numbers) |
 | IPsec phase 1 / 2 | IKEProposal, IKEPolicy, IPSecProposal, IPSecPolicy, IPSecProfile, Tunnel, TunnelTermination on the tunnel interface with the outside IP |
 
+With netbox-security (`mappers/security.py`; its docstring has the full
+mapping):
+
+| FortiGate | netbox-security |
+| --- | --- |
+| address (subnet), VIP | Address on a CustomPrefix (not an IPAM prefix: firewall objects would fill IPAM with host routes); a VIP is its mapped address |
+| address (FQDN) | Address with a DNS name |
+| address (range) | AddressSet of the subnets covering the range exactly |
+| address group, VIP group | AddressSet (nested groups in `address_sets`) |
+| custom service, group | Application (protocols, single ports; wide ranges only described), ApplicationSet |
+| zone, interface named in a policy | SecurityZone + SecurityZoneAssignment per interface |
+| policy | SecurityZonePolicy per source x destination interface, `index` = position |
+| IP pool | NatPool + NatPoolMember (IPAM prefix, or IP range) |
+| VIP | destination NatRule (+ a NatPool for the mapped address) |
+| central SNAT / policy NAT | source NatRule; rule sets assigned to the device or VDC |
+
+Why some choices:
+
+- Names are scoped with `identifier` (`<FortiGate>` or `<FortiGate> <vdom>`);
+  NatPool and NatRuleSet have no identifier, so it starts their names.
+- Policies use one AddressList per address and side
+  (`all (source)`, `all (destination)`): netbox-security refuses a policy
+  whose source and destination share a list, which "all" to "all" would.
+- A zone used on both sides of a policy gets `allow_intra_zone`, which
+  netbox-security requires for such policies.
+- NAT rules point at IPAM objects (netbox-security's model). The mapper
+  reuses the core mapper's connected prefix under the same key, otherwise
+  finds or creates one, release-only. A range that overlaps another
+  NetBox range (NetBox refuses overlaps) is left out with a note.
+- A group inside a group gets a slightly higher write order so its members
+  exist first (the plan sorts by order, then key).
+
 A tunnel between two FortiGates that are both imported is one Tunnel:
 its name is built from both public addresses, sorted, so the second
 firewall finds and joins the tunnel the first created.
@@ -137,4 +169,5 @@ the user, so change-approval decides like for any edit:
 `tests/test_parser.py` (no database), `tests/test_apply.py` (plan, apply,
 delta, conflicts, drift, rollback, two firewalls), `tests/test_views.py`
 (upload, password prompt, memory-only upload, review, API, jobs) and
-`tests/test_change_approval.py` (skipped unless installed).
+`tests/test_change_approval.py` and `tests/test_security.py` (skipped
+unless the plugin is installed).

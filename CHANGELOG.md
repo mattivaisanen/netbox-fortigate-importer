@@ -25,5 +25,7 @@ New:
   for deletion.
 - Dry run, apply (all or nothing, re-checked against NetBox first) and
   rollback of an apply, all from NetBox's change log.
+- With netbox-security, imports the firewall's addresses, address groups,
+  VIPs, services, service groups, zones, policies, IP pools and NAT rules.
 - With netbox-change-approval, imports by users without bypass go through
   approval as one change set, and the import follows the decisions.

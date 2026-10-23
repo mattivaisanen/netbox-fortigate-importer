@@ -23,7 +23,7 @@ def collect(ctx):
     if integrations.has_security():
         from .security import SecurityMapper
 
-        desired += SecurityMapper(ctx).run()
+        desired += SecurityMapper(ctx, desired).run()
     if integrations.has_routing():
         from .routing import RoutingMapper
 

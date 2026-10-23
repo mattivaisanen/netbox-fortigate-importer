@@ -6,8 +6,8 @@ what would change, try it with a dry run, apply it, and roll it back if
 needed. Later imports of the same firewall are delta syncs: changed and
 deleted objects wait for a person to decide.
 
-> Work in progress: core NetBox objects work end to end. netbox-security
-> and netbox-routing objects come next.
+> Work in progress: core NetBox and netbox-security objects work end to
+> end. netbox-routing objects come next.
 
 ## How an import works
 
@@ -52,6 +52,24 @@ the plan was made, nothing is applied until you plan again.
 - IPsec VPNs: IKE and IPsec proposals and policies, profiles, tunnels and
   terminations. A tunnel between two imported FortiGates is one tunnel
   with both ends.
+
+With [netbox-security](https://github.com/andy-shady-org/netbox-security)
+installed, also the firewall's rules:
+
+- Addresses (subnets, ranges, FQDNs), address groups, VIPs and VIP groups
+  as addresses and address sets, scoped to the firewall (and VDOM) with
+  netbox-security's identifier, so two FortiGates can both have "all".
+- Custom services and service groups as applications and application sets.
+- Zones, and interfaces that policies name directly, as security zones on
+  their interfaces.
+- Policies as security zone policies, in the firewall's order: one per
+  source and destination interface pair.
+- IP pools as NAT pools, VIPs as destination NAT rules, central SNAT or
+  policy NAT as source NAT rules, on the device (or its VDOM).
+
+Country, MAC and dynamic addresses, excluded group members, negated
+fields, users and schedules have no netbox-security form: they are left
+out or written into the description, and the plan's notes list them.
 
 Every object it creates gets the tag `fortigate-import`.
 

@@ -10,7 +10,7 @@ from dcim.models import Device, DeviceRole, DeviceType, Interface, Manufacturer,
 from ipam.models import VLAN, VRF, IPAddress, IPRange, Prefix
 from vpn.models import Tunnel, TunnelTermination
 
-from netbox_fortigate_importer import applier, planner, rollback
+from netbox_fortigate_importer import applier, integrations, planner, rollback
 from netbox_fortigate_importer.extract import load
 from netbox_fortigate_importer.models import (
     ActionChoices, DecisionChoices, FortiGateBinding, ImportRun, ManagedObject, OutcomeChoices, RunStatusChoices,
@@ -228,8 +228,12 @@ class DeltaTest(ImportTestCase):
         data['connected'] = [n for n in data['connected'] if n['interface'] != 'dmz']
         run = self.plan(binding, data)
         deletes = run.changes.filter(action=ActionChoices.DELETE)
-        self.assertEqual(set(deletes.values_list('key', flat=True)),
+        keys = set(deletes.values_list('key', flat=True))
+        self.assertEqual({k for k in keys if not k.startswith('sec/')},
                          {'interface/dmz', 'ip/dmz/172.16.50.1', 'prefix/vrf/root/172.16.50.0/24'})
+        if integrations.has_security():
+            # The interface leaves its security zone too.
+            self.assertEqual({k for k in keys if k.startswith('sec/')}, {'sec/root/zone/dmz/dmz'})
         self.assertFalse(deletes.exclude(decision=DecisionChoices.PENDING).exists())
         self.approve_all(run)
         self.apply(run)
@@ -409,7 +413,8 @@ class SettingsTest(ImportTestCase):
         binding.options = {'create_connected_prefixes': False}
         binding.save()
         run = self.plan(binding, data_of(HQ))
-        self.assertFalse(run.changes.filter(key__startswith='prefix/').exists())
+        # Only NAT rules (netbox-security) still need prefixes, for the addresses they translate.
+        self.assertFalse(run.changes.filter(key__startswith='prefix/').exclude(section='nat').exists())
 
     def test_vlans_are_grouped_per_firewall(self):
         binding, _ = self.first_import()

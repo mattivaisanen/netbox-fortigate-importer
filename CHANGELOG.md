@@ -27,5 +27,9 @@ New:
   rollback of an apply, all from NetBox's change log.
 - With netbox-security, imports the firewall's addresses, address groups,
   VIPs, services, service groups, zones, policies, IP pools and NAT rules.
+- With netbox-routing, imports the firewall's static routes, prefix and
+  access lists, AS path and community lists, route maps, BGP (routers,
+  neighbors with their filters, neighbor groups) and OSPF (instances,
+  areas, interfaces).
 - With netbox-change-approval, imports by users without bypass go through
   approval as one change set, and the import follows the decisions.

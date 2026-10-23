@@ -6,8 +6,8 @@ what would change, try it with a dry run, apply it, and roll it back if
 needed. Later imports of the same firewall are delta syncs: changed and
 deleted objects wait for a person to decide.
 
-> Work in progress: core NetBox and netbox-security objects work end to
-> end. netbox-routing objects come next.
+> Work in progress: core NetBox, netbox-security and netbox-routing
+> objects work end to end. Next: testing on real NetBox installs, v0.1.0.
 
 ## How an import works
 
@@ -66,6 +66,25 @@ installed, also the firewall's rules:
   source and destination interface pair.
 - IP pools as NAT pools, VIPs as destination NAT rules, central SNAT or
   policy NAT as source NAT rules, on the device (or its VDOM).
+
+With [netbox-routing](https://github.com/DanSheps/netbox-routing)
+installed, also its routing:
+
+- Static routes on the device, in the VDOM's VRF (blackhole and SD-WAN
+  routes too).
+- Prefix lists and access lists (as prefix lists), AS path lists,
+  community lists and route maps, linked to each other as on the firewall.
+  Their names start with the firewall (and VDOM), since netbox-routing
+  names are unique across NetBox.
+- BGP: a router per AS on the device, a scope per VDOM, the neighbors with
+  their route maps and prefix lists, and neighbor groups as peer templates.
+  Neighbor addresses are found in IPAM or created there.
+- OSPF: an instance per VDOM, its areas and the interfaces its networks
+  cover.
+
+BGP network statements, BGP BFD and OSPF costs have no netbox-routing
+field and are listed in the plan's notes. Passwords and keys are never
+imported.
 
 Country, MAC and dynamic addresses, excluded group members, negated
 fields, users and schedules have no netbox-security form: they are left

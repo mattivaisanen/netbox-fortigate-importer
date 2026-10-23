@@ -129,6 +129,35 @@ Why some choices:
 - A group inside a group gets a slightly higher write order so its members
   exist first (the plan sorts by order, then key).
 
+With netbox-routing (`mappers/routing.py`; its docstring has the full
+mapping):
+
+| FortiGate | netbox-routing |
+| --- | --- |
+| static route | StaticRoute (device, VRF, next hop, interface next hop, distance as metric) |
+| prefix list, access list | PrefixList + PrefixListEntry on a netbox-routing CustomPrefix ("any" has none) |
+| AS path list | ASPath + ASPathEntry |
+| community list | CommunityList + CommunityListEntry; Community found or created (global) |
+| route map | RouteMap + RouteMapEntry; matches on lists link to them, other matches and sets go in the JSON fields |
+| BGP | BGPRouter per AS (on the device), BGPScope per VDOM VRF, BGPAddressFamily per IP version, BGPPeer + BGPPeerAddressFamily per neighbor, BGPPeerTemplate per neighbor group |
+| OSPF | OSPFInstance per VDOM, OSPFArea (global, found or created), OSPFInterface per interface a network covers |
+
+Why some choices:
+
+- PrefixList, RouteMap, ASPath and CommunityList names are unique across
+  NetBox, so their names start with `<FortiGate> [<vdom>]`.
+- Access lists become prefix lists: netbox-routing has no access lists,
+  and route maps match them by name. A non-exact rule gets `le 32`/`le 128`.
+- netbox-routing refuses an `le` not longer than the prefix (FortiGate's
+  `le 0` exact match: dropped) and, in the tested version, `ge` and `le`
+  together: `le` is left out with a note.
+- A BGP neighbor's address must be an IPAM IPAddress. The mapper reuses
+  an interface address the core mapper plans, otherwise finds or creates
+  one (release-only, shared: the other firewall's import may own it).
+  Remote AS numbers become ASNs with the same rules as the local one.
+- Planner: a many-to-many name in `lookup` (StaticRoute `devices`) only
+  filters; the `m2m` values set it on create.
+
 A tunnel between two FortiGates that are both imported is one Tunnel:
 its name is built from both public addresses, sorted, so the second
 firewall finds and joins the tunnel the first created.
@@ -169,5 +198,5 @@ the user, so change-approval decides like for any edit:
 `tests/test_parser.py` (no database), `tests/test_apply.py` (plan, apply,
 delta, conflicts, drift, rollback, two firewalls), `tests/test_views.py`
 (upload, password prompt, memory-only upload, review, API, jobs) and
-`tests/test_change_approval.py` and `tests/test_security.py` (skipped
-unless the plugin is installed).
+`tests/test_change_approval.py`, `tests/test_security.py` and
+`tests/test_routing.py` (skipped unless the plugin is installed).

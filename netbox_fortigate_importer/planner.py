@@ -29,7 +29,7 @@ from django.db import models, transaction
 from django.utils import timezone
 
 from .mappers import Context, collect
-from .mappers.base import Ref, model_label, normalize, read_field, read_m2m, snapshot, sort_values
+from .mappers.base import Ref, model_field, model_label, normalize, read_field, read_m2m, snapshot, sort_values
 from .models import ActionChoices, DecisionChoices, ImportRun, ManagedObject, PlannedChange, RunStatusChoices
 
 #: Key in ManagedObject.fields holding the importer's notes about the object.
@@ -224,7 +224,8 @@ class Planner:
         create = {}
         if obj is None:
             for name, value in (desired.lookup or {}).items():
-                if '__' not in name:
+                # Many-to-many lookups only find; the m2m values set them.
+                if '__' not in name and not model_field(desired.model, name).many_to_many:
                     create[name] = normalize(value)
             for name, value in desired.create_defaults.items():
                 create[name] = normalize(value)

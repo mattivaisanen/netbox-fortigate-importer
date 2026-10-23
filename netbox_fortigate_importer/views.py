@@ -25,7 +25,7 @@ from .models import (
     ActionChoices, DecisionChoices, FortiGateBinding, ImportRun, PlannedChange, RunStatusChoices,
 )
 from .parser import ParseError
-from .parser.files import ConfigFileError, PasswordRequired
+from .parser.files import ConfigFileError, PasswordRequired, UnsupportedEncryption
 from .settings import get_setting
 
 
@@ -148,6 +148,9 @@ class ImportRunUploadView(ConditionalLoginRequiredMixin, View):
                 password_required = True
                 if not password:
                     error = _('This is an encrypted backup. Enter the password it was saved with.')
+            except UnsupportedEncryption as exc:
+                # Another password won't help: don't ask for one again.
+                error = str(exc)
             except (ConfigFileError, ParseError) as exc:
                 error = str(exc)
                 password_required = bool(password)

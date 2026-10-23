@@ -5,7 +5,7 @@ from django.test import SimpleTestCase
 
 from netbox_fortigate_importer.extract import extract, load
 from netbox_fortigate_importer.parser import (
-    DecryptionError, ParseError, PasswordRequired, UnsupportedFormat, parse, read_config_bytes,
+    DecryptionError, ParseError, PasswordRequired, UnsupportedEncryption, UnsupportedFormat, parse, read_config_bytes,
 )
 from netbox_fortigate_importer.parser.cli import tokenize_line
 from netbox_fortigate_importer.parser.layout import layout
@@ -188,6 +188,33 @@ class FileTests(SimpleTestCase):
 
         with self.assertRaisesMessage(UnsupportedFormat, 'damaged'):
             read_config_bytes(gzip.compress(b'config system global\nend\n')[:-12])
+
+    def test_new_encryption_is_named(self):
+        # FortiOS 7.2.9+, 7.4.4+ and 7.6+ derive the key differently. Without
+        # a sample, the old method is tried and its failure explained.
+        text = read(BRANCH).decode()
+        for major, minor, build in ((7, 4, 2662), (7, 4, 2726), (7, 2, 1688), (7, 6, 3401), (8, 0, 100)):
+            with self.subTest(version=(major, minor, build)):
+                data = encrypt_backup(text, 'pw', major=major, minor=minor, build=build)
+                with self.assertRaisesMessage(UnsupportedEncryption, f'FortiOS {major}.{minor} (build {build})'):
+                    read_config_bytes(data, 'wrong')
+                # A file that still uses the old method keeps working.
+                self.assertEqual(read_config_bytes(data, 'pw'), text)
+
+    def test_old_encryption_wrong_password(self):
+        text = read(BRANCH).decode()
+        for major, minor, build in ((7, 4, 2573), (7, 2, 1639), (7, 0, 9999), (6, 4, 2000)):
+            with self.subTest(version=(major, minor, build)):
+                data = encrypt_backup(text, 'pw', major=major, minor=minor, build=build)
+                with self.assertRaises(DecryptionError) as ctx:
+                    read_config_bytes(data, 'wrong')
+                self.assertNotIn('not supported', str(ctx.exception))
+
+    def test_unknown_build_hints(self):
+        data = encrypt_backup('config system global\nend\n', 'pw', minor=4)
+        data = data.replace(b'|1639|', b'|x|', 1)
+        with self.assertRaisesMessage(DecryptionError, 'may come from FortiOS 7.2.9, 7.4.4 or later'):
+            read_config_bytes(data, 'wrong')
 
     def test_truncated_encrypted(self):
         with self.assertRaises(UnsupportedFormat):

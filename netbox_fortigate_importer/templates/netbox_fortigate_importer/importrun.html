@@ -57,11 +57,34 @@
 
 {% block content %}
 {% if active_job %}
-<div class="alert alert-info" role="alert">
-  <i class="mdi mdi-progress-clock"></i>
-  {% blocktrans with status=active_job.get_status_display %}A job for this import is {{ status }}.{% endblocktrans %}
-  <a href="{{ active_job.get_absolute_url }}">{% trans "Follow it" %}</a> {% trans "or reload this page." %}
+<div class="alert alert-info d-flex align-items-center gap-2" role="status" id="fgi-job"
+     data-status-url="{% url 'plugins:netbox_fortigate_importer:importrun_job_status' pk=object.pk %}">
+  <span class="spinner-border spinner-border-sm" aria-hidden="true"></span>
+  <span>
+    {% blocktrans with status=active_job.get_status_display %}A job for this import is {{ status }}.{% endblocktrans %}
+    {% trans "This page refreshes when it is done." %}
+    <a href="{{ active_job.get_absolute_url }}">{% trans "Follow the job" %}</a>
+  </span>
 </div>
+<script>
+(function () {
+  var box = document.getElementById('fgi-job');
+  var url = box.getAttribute('data-status-url');
+  var delay = 1500;
+  function check() {
+    fetch(url, {headers: {'Accept': 'application/json'}, credentials: 'same-origin'})
+      .then(function (response) { return response.ok ? response.json() : null; })
+      .then(function (data) {
+        if (data && !data.active) { window.location.reload(); return; }
+        // Slower polling for long jobs, at most every 10 seconds.
+        delay = Math.min(delay * 1.3, 10000);
+        window.setTimeout(check, delay);
+      })
+      .catch(function () { window.setTimeout(check, 10000); });
+  }
+  window.setTimeout(check, delay);
+})();
+</script>
 {% if no_worker %}<div class="alert alert-danger" role="alert"><i class="mdi mdi-alert"></i> {{ no_worker }}</div>{% endif %}
 {% endif %}
 {% if object.error %}

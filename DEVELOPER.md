@@ -237,6 +237,18 @@ rollback) and unlinks the device in `detach_device()` before deleting it;
 approval plugin the device may be created later than the apply:
 `planner.attach_created_device()` links it on the next plan.
 
+NetBox's `Device.save()` creates the components of the device type
+(interface templates and so on). They did not exist when the plan was
+made, so their planned interfaces are creates. A planned create stores the
+names of its lookup fields (`proposed['lookup']`, only when the lookup is
+made of plain fields that `create` repeats). When this apply created the
+device, the applier's `made_by_netbox()` repeats the lookup of every
+planned create that hangs on that device (`device` = `Ref('device')`)
+before creating it. A match is updated instead
+(written like a create, logged as a change, tagged, and marked adopted so
+a later removal only stops managing it). Rollback deletes the device and
+with it those interfaces.
+
 ## Reviewing with dependencies
 
 Every planned change stores the keys it refers to (`depends_on`, from the
@@ -252,6 +264,14 @@ names that change and why it was not written.
 Dry-run results live in `ImportRun.dry_run['items']` (by key), not on the
 changes, so the change list reads them through the `dry_run` filter and
 the table's `dry_run` column.
+
+## Job progress
+
+While a job of the run is queued or running, the run page shows a spinner
+and polls `runs/<pk>/job-status/` (JSON: `active`, the job's `status`, the
+run's `run_status`; needs view permission on the run). The poll starts at
+1.5 s and slows to at most 10 s; once no job is active it reloads the page,
+which then shows the results.
 
 ## Job errors
 

@@ -28,7 +28,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from . import integrations
-from .mappers.base import is_ref_token, ref_key, unescape_literal, read_field, read_m2m, sort_values, write_field
+from .mappers.base import Ref, is_ref_token, ref_key, unescape_literal, read_field, read_m2m, sort_values, write_field
 from .models import (
     ActionChoices, DecisionChoices, ImportRun, ManagedObject, OutcomeChoices, PlannedChange, RunStatusChoices,
 )
@@ -168,6 +168,10 @@ class Applier:
         self.removing = set()
         #: Keys whose object was written but whose deferred fields failed.
         self.deferred_failed = set()
+        #: Keys of the objects this apply created.
+        self.created = set()
+        #: Keys of planned creates that matched an object NetBox made during this apply.
+        self.matched = set()
 
     def load(self):
         self.options = self.run.options or {}
@@ -244,7 +248,8 @@ class Applier:
             'label': row.label, 'section': row.section, 'vdom': row.vdom, 'order': row.order,
             'flags': proposed.get('flags', []), 'model': row.object_type.natural_key(),
             # Made by someone else first: a removal only stops managing it.
-            'adopted': row.action == ActionChoices.ADOPT or bool(earlier_meta.get('adopted')),
+            'adopted': (row.action == ActionChoices.ADOPT or row.key in self.matched
+                        or bool(earlier_meta.get('adopted'))),
         }
         return values
 
@@ -305,7 +310,16 @@ class Applier:
 
         names -= deferred_names
         created = row.object_id is None
-        if created:
+        obj = self.made_by_netbox(row, model) if created else None
+        if obj is not None:
+            # NetBox made it while this apply ran (a new device gets the
+            # interfaces of its device type): update it instead.
+            created = False
+            require(self.user, obj, 'change')
+            obj.snapshot()
+            self.keys[row.key] = obj.pk
+            self.matched.add(row.key)
+        elif created:
             obj = model()
             for name, value in proposed.get('create', {}).items():
                 write_field(obj, name, self.resolve(value))
@@ -333,11 +347,33 @@ class Applier:
             require(self.user, obj, action)
         if created:
             self.keys[row.key] = obj.pk
+            self.created.add(row.key)
+        if created or row.key in self.matched:
             if self.tag is not None and hasattr(obj, 'tags'):
                 obj.tags.add(self.tag)
             if row.key == 'device':
                 self.attach_device(obj)
         return obj
+
+    def made_by_netbox(self, row, model):
+        """
+        The object a planned create would duplicate, if NetBox made it during
+        this apply: the interfaces (and other components) NetBox adds from
+        the device type when this apply creates the device.
+        """
+        if 'device' not in self.created:
+            return None
+        proposed = row.proposed or {}
+        names = proposed.get('lookup') or []
+        create = proposed.get('create', {})
+        if create.get('device') != Ref('device').token() or 'device' not in names:
+            return None
+        query = {}
+        for name in names:
+            value = self.resolve(create[name])
+            field = model._meta.get_field(name)
+            query[field.attname if field.is_relation and field.many_to_one else name] = value
+        return model.objects.filter(**query).order_by('pk').first()
 
     def attach_device(self, device):
         """Link the FortiGate to the device this apply created."""

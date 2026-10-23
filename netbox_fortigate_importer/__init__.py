@@ -26,7 +26,7 @@ class FortiGateImporterConfig(PluginConfig):
         # New objects start approved; changes and deletes always wait for review.
         'auto_approve_creates': True,
         # One VRF per VDOM (and per FortiOS VRF inside a VDOM).
-        'vrf_per_vdom': False,
+        'vrf_per_vdom': True,
         # Create prefixes for the networks on the firewall's interfaces.
         'create_connected_prefixes': True,
         # Write the firewall's settings (DNS, NTP, syslog, ...) into the
@@ -42,6 +42,9 @@ class FortiGateImporterConfig(PluginConfig):
         # instead of rolling the whole run back.
         'continue_on_error': False,
     }
+
+    menu = 'navigation.menu'
+    template_extensions = 'template_content.template_extensions'
 
     def ready(self):
         super().ready()

@@ -1,0 +1,64 @@
+{% extends 'generic/object.html' %}
+{% load helpers %}
+{% load render_table from django_tables2 %}
+{% load i18n %}
+
+{% block extra_controls %}
+  {% if perms.netbox_fortigate_importer.add_importrun %}
+    <a href="{% url 'plugins:netbox_fortigate_importer:importrun_upload' %}" class="btn btn-primary">
+      <i class="mdi mdi-upload"></i> {% trans "Import configuration" %}
+    </a>
+  {% endif %}
+{% endblock %}
+
+{% block content %}
+<div class="row mb-3">
+  <div class="col col-12 col-xl-6">
+    <div class="card">
+      <h2 class="card-header">{% trans "FortiGate" %}</h2>
+      <table class="table table-hover attr-table">
+        <tr><th scope="row">{% trans "Name" %}</th><td>{{ object.name }}</td></tr>
+        <tr><th scope="row">{% trans "Device" %}</th><td>{{ object.device|linkify }}</td></tr>
+        <tr><th scope="row">{% trans "Virtual chassis" %}</th><td>{{ object.virtual_chassis|linkify|placeholder }}</td></tr>
+        <tr><th scope="row">{% trans "Serial number" %}</th><td class="font-monospace">{{ object.serial|placeholder }}</td></tr>
+        <tr><th scope="row">{% trans "Hostname" %}</th><td>{{ object.hostname|placeholder }}</td></tr>
+        <tr><th scope="row">{% trans "Model" %}</th><td>{{ object.model_code|placeholder }}</td></tr>
+        <tr><th scope="row">{% trans "Firmware" %}</th><td>{{ object.firmware|placeholder }}</td></tr>
+        <tr><th scope="row">{% trans "Multi-VDOM" %}</th><td>{% checkmark object.multi_vdom %}</td></tr>
+        <tr><th scope="row">{% trans "Description" %}</th><td>{{ object.description|placeholder }}</td></tr>
+      </table>
+    </div>
+    {% include 'inc/panels/tags.html' %}
+    {% include 'inc/panels/comments.html' %}
+  </div>
+  <div class="col col-12 col-xl-6">
+    <div class="card">
+      <h2 class="card-header">{% trans "Import options" %}</h2>
+      <table class="table table-hover attr-table">
+        <tr><th scope="row">{% trans "RIR for new ASNs" %}</th><td>{{ object.asn_rir|linkify|placeholder }}</td></tr>
+        {% for key, value in options.items %}
+        <tr>
+          <th scope="row"><code>{{ key }}</code></th>
+          <td>{% if value is True or value is False %}{% checkmark value %}{% else %}{{ value|placeholder }}{% endif %}
+            {% if key in object.options %}<span class="badge text-bg-blue">{% trans "set here" %}</span>{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </table>
+    </div>
+    <div class="card">
+      <h2 class="card-header">{% blocktrans with n=managed_total %}Managed objects ({{ n }}){% endblocktrans %}</h2>
+      <table class="table table-hover">
+        {% for label, count in managed_counts %}
+        <tr><td><code>{{ label }}</code></td><td class="text-end">{{ count }}</td></tr>
+        {% empty %}
+        <tr><td class="text-muted">{% trans "Nothing imported yet." %}</td></tr>
+        {% endfor %}
+      </table>
+    </div>
+  </div>
+</div>
+<div class="card">
+  <h2 class="card-header">{% trans "Imports" %}</h2>
+  <div class="table-responsive">{% render_table runs_table 'inc/table.html' %}</div>
+</div>
+{% endblock %}

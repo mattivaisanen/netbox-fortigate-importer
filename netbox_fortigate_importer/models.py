@@ -28,6 +28,7 @@ from django.utils.translation import gettext_lazy as _
 from netbox.models import BaseModel, ChangeLoggedModel
 from netbox.models.features import JobsMixin, JournalingMixin, TagsMixin
 from utilities.choices import ChoiceSet
+from utilities.querysets import RestrictedQuerySet
 
 
 class RunStatusChoices(ChoiceSet):
@@ -296,7 +297,7 @@ class PlannedChange(models.Model):
     #: netbox-change-approval request created for this change, if any.
     change_request_id = models.PositiveBigIntegerField(null=True, blank=True)
 
-    objects = models.Manager()
+    objects = RestrictedQuerySet.as_manager()
 
     class Meta:
         ordering = ('run', 'order', 'pk')
@@ -356,7 +357,7 @@ class ManagedObject(models.Model):
     confirmed = models.BooleanField(default=True)
     updated = models.DateTimeField(auto_now=True)
 
-    objects = models.Manager()
+    objects = RestrictedQuerySet.as_manager()
 
     class Meta:
         ordering = ('binding', 'key')

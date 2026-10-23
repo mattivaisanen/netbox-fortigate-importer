@@ -1,0 +1,110 @@
+{% extends 'generic/object.html' %}
+{% load helpers %}
+{% load i18n %}
+
+{% block title %}{{ object.get_action_display }}: {{ object.label|default:object.key }}{% endblock %}
+
+{% block breadcrumbs %}
+  <li class="breadcrumb-item"><a href="{% url 'plugins:netbox_fortigate_importer:importrun_list' %}">{% trans "Import runs" %}</a></li>
+  <li class="breadcrumb-item"><a href="{{ object.run.get_absolute_url }}">{{ object.run }}</a></li>
+{% endblock %}
+
+{% block subtitle %}
+  <div class="text-secondary d-flex flex-wrap align-items-center gap-2 mb-2">
+    {% badge object.get_action_display bg_color=object.get_action_color %}
+    {% badge object.get_decision_display bg_color=object.get_decision_color %}
+    {% if object.outcome %}{% badge object.get_outcome_display bg_color=object.get_outcome_color %}{% endif %}
+    <span class="font-monospace small">{{ object.key }}</span>
+  </div>
+{% endblock %}
+
+{% block control-buttons %}
+  {% if can_decide %}
+  <form method="post" action="{% url 'plugins:netbox_fortigate_importer:importrun_decide' pk=object.run.pk %}" class="d-inline">
+    {% csrf_token %}
+    <input type="hidden" name="pk" value="{{ object.pk }}">
+    <input type="hidden" name="return_url" value="{{ object.get_absolute_url }}">
+    {% for value, label in decisions %}{% if value != object.decision %}
+      <button type="submit" name="decision" value="{{ value }}" class="btn {% if value == 'approved' %}btn-success{% elif value == 'skipped' %}btn-secondary{% elif value == 'keep-netbox' %}btn-cyan{% else %}btn-outline-secondary{% endif %}">{{ label }}</button>
+    {% endif %}{% endfor %}
+  </form>
+  {% endif %}
+{% endblock %}
+
+{% block content %}
+{% if object.error %}
+<div class="alert alert-danger" role="alert"><i class="mdi mdi-alert"></i> {{ object.error }}</div>
+{% elif dry_run and dry_run.outcome == 'failed' %}
+<div class="alert alert-warning" role="alert"><i class="mdi mdi-test-tube"></i> {% trans "Dry run:" %} {{ dry_run.error }}</div>
+{% endif %}
+{% if object.note %}
+<div class="alert alert-info" role="alert"><i class="mdi mdi-information-outline"></i> {{ object.note }}</div>
+{% endif %}
+<div class="row mb-3">
+  <div class="col col-12 col-xl-8">
+    <div class="card">
+      <h2 class="card-header">
+        {% if object.action == 'create' %}{% trans "New object" %}{% elif object.action == 'delete' or object.action == 'deprecate' or object.action == 'unmanage' %}{% trans "Removal" %}{% else %}{% trans "Fields" %}{% endif %}
+      </h2>
+      {% if object.diff %}
+      <table class="table table-hover attr-table mb-0">
+        <thead>
+          <tr>
+            <th>{% trans "Field" %}</th>
+            {% if object.action != 'create' %}<th>{% trans "NetBox now" %}</th>{% endif %}
+            <th>{% trans "FortiGate" %}</th>
+            {% if object.last_applied %}<th>{% trans "Last import" %}</th>{% endif %}
+          </tr>
+        </thead>
+        {% for row in object.diff %}
+        <tr class="{% if row.conflict %}table-purple{% elif row.netbox_edited %}table-info{% endif %}">
+          <th scope="row">{{ row.field }}
+            {% if row.conflict %}<span class="badge text-bg-purple" title="{% trans 'Changed in NetBox and on the firewall' %}">{% trans "conflict" %}</span>{% endif %}
+            {% if row.netbox_edited %}<span class="badge text-bg-cyan" title="{% trans 'Edited in NetBox; the firewall did not change, so NetBox is kept' %}">{% trans "kept" %}</span>{% endif %}
+          </th>
+          {% if object.action != 'create' %}<td class="text-break">{{ row.current|placeholder }}</td>{% endif %}
+          <td class="text-break{% if not row.netbox_edited %} text-success{% endif %}">{{ row.proposed|placeholder }}</td>
+          {% if object.last_applied %}<td class="text-break text-muted">{{ row.last|placeholder }}</td>{% endif %}
+        </tr>
+        {% endfor %}
+      </table>
+      <div class="card-footer text-muted small">{% trans "Values like $ref:interface/port1 point at another object of this import." %}</div>
+      {% elif object.action == 'delete' or object.action == 'deprecate' or object.action == 'unmanage' %}
+      <div class="card-body">
+        {% if object.object %}{{ object.object|linkify }}{% else %}<span class="text-muted">{% trans "Already gone from NetBox." %}</span>{% endif %}
+        <div class="text-muted small mt-2">
+          {% if object.action == 'delete' %}{% trans "Deleted from NetBox when approved." %}
+          {% elif object.action == 'deprecate' %}{% trans "Status set to deprecated when approved." %}
+          {% else %}{% trans "Kept in NetBox; the importer stops managing it." %}{% endif %}
+        </div>
+      </div>
+      {% else %}
+      <div class="card-body text-muted">{% trans "No field changes." %}</div>
+      {% endif %}
+    </div>
+  </div>
+  <div class="col col-12 col-xl-4">
+    <div class="card">
+      <h2 class="card-header">{% trans "Object" %}</h2>
+      <table class="table table-hover attr-table">
+        <tr><th scope="row">{% trans "Type" %}</th><td>{{ object.object_type.name|bettertitle }}</td></tr>
+        <tr><th scope="row">{% trans "NetBox object" %}</th><td>{% if object.object %}{{ object.object|linkify }}{% else %}{{ ''|placeholder }}{% endif %}</td></tr>
+        <tr><th scope="row">{% trans "Section" %}</th><td>{{ object.section|placeholder }}</td></tr>
+        <tr><th scope="row">{% trans "VDOM" %}</th><td>{{ object.vdom|placeholder }}</td></tr>
+        <tr><th scope="row">{% trans "Decided by" %}</th><td>{{ object.decided_by|placeholder }}</td></tr>
+        {% if change_request_url %}
+        <tr><th scope="row">{% trans "Change request" %}</th><td><a href="{{ change_request_url }}">#{{ object.change_request_id }}</a></td></tr>
+        {% endif %}
+      </table>
+    </div>
+    {% if object.depends_on %}
+    <div class="card">
+      <h2 class="card-header">{% trans "Needs" %}</h2>
+      <ul class="list-group list-group-flush small font-monospace">
+        {% for key in object.depends_on %}<li class="list-group-item">{{ key }}</li>{% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

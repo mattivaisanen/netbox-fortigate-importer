@@ -1,0 +1,123 @@
+{% extends 'generic/_base.html' %}
+{% load i18n %}
+
+{% block title %}{% trans "Import a FortiGate configuration" %}{% endblock %}
+
+{% block content %}
+<div class="row">
+  <div class="col col-12 col-lg-8">
+    <form id="fgi-upload" method="post" enctype="multipart/form-data" class="card">
+      {% csrf_token %}
+      <div class="card-body">
+        <label id="fgi-drop" for="id_file"
+               class="d-flex flex-column align-items-center justify-content-center text-center border border-2 rounded p-5 mb-3"
+               style="border-style: dashed !important; cursor: pointer; min-height: 14rem;">
+          <i class="mdi mdi-file-upload-outline display-4 text-muted"></i>
+          <span class="fs-4" id="fgi-drop-label">{% trans "Drop a configuration file here, or click to choose one" %}</span>
+          <span class="text-muted small mt-2">
+            {% blocktrans with mb=max_upload_mb %}Plain text, gzip or encrypted backups (.conf), up to {{ mb }} MB.{% endblocktrans %}
+          </span>
+          <input type="file" name="file" id="id_file" class="d-none">
+        </label>
+
+        <div id="fgi-password" class="mb-3{% if not password_required %} d-none{% endif %}">
+          <label for="id_password" class="form-label"><i class="mdi mdi-lock"></i> {% trans "Backup password" %}</label>
+          <input type="password" name="password" id="id_password" class="form-control" autocomplete="off">
+          <div class="form-text">{% trans "This backup is encrypted. The password is used once to read the file and is never saved." %}</div>
+        </div>
+
+        <div id="fgi-error" class="alert alert-danger{% if not error %} d-none{% endif %}" role="alert">{{ error }}</div>
+        <div id="fgi-busy" class="alert alert-info d-none" role="status">
+          <span class="spinner-border spinner-border-sm me-2"></span>{% trans "Reading the configuration…" %}
+        </div>
+      </div>
+      <div class="card-footer text-end">
+        <button type="submit" class="btn btn-primary" id="fgi-submit"><i class="mdi mdi-upload"></i> {% trans "Read configuration" %}</button>
+      </div>
+    </form>
+  </div>
+  <div class="col col-12 col-lg-4">
+    <div class="card">
+      <h2 class="card-header">{% trans "What happens" %}</h2>
+      <div class="card-body small">
+        <ol class="ps-3 mb-2">
+          <li>{% trans "The file is read in memory, secrets are removed and only the data the importer needs is kept. The file itself is never saved." %}</li>
+          <li>{% trans "The firewall is matched to its NetBox device by serial number or hostname, or you choose it." %}</li>
+          <li>{% trans "You review the plan: what would be created, changed or removed in NetBox." %}</li>
+          <li>{% trans "Dry run to check it, then apply. Every apply can be rolled back." %}</li>
+        </ol>
+        <span class="text-muted">{% trans "Get a configuration from the FortiGate under System → Configuration → Backup, or with 'show full-configuration'." %}</span>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+(function () {
+  var form = document.getElementById('fgi-upload');
+  var input = document.getElementById('id_file');
+  var drop = document.getElementById('fgi-drop');
+  var label = document.getElementById('fgi-drop-label');
+  var passwordBox = document.getElementById('fgi-password');
+  var password = document.getElementById('id_password');
+  var errorBox = document.getElementById('fgi-error');
+  var busy = document.getElementById('fgi-busy');
+  var submit = document.getElementById('fgi-submit');
+  var file = null;
+
+  function choose(selected) {
+    if (!selected) { return; }
+    file = selected;
+    label.textContent = selected.name + ' (' + Math.ceil(selected.size / 1024) + ' KB)';
+    passwordBox.classList.add('d-none');
+    password.value = '';
+    errorBox.classList.add('d-none');
+  }
+  input.addEventListener('change', function () { choose(input.files[0]); });
+  ['dragenter', 'dragover'].forEach(function (name) {
+    drop.addEventListener(name, function (event) { event.preventDefault(); drop.classList.add('border-primary'); });
+  });
+  ['dragleave', 'drop'].forEach(function (name) {
+    drop.addEventListener(name, function (event) { event.preventDefault(); drop.classList.remove('border-primary'); });
+  });
+  drop.addEventListener('drop', function (event) {
+    if (event.dataTransfer.files.length) { choose(event.dataTransfer.files[0]); }
+  });
+
+  form.addEventListener('submit', function (event) {
+    if (!window.fetch || !window.FormData) { return; }  // plain form post
+    event.preventDefault();
+    if (!file) { input.click(); return; }
+    var data = new FormData();
+    data.append('csrfmiddlewaretoken', form.querySelector('[name=csrfmiddlewaretoken]').value);
+    data.append('file', file, file.name);
+    if (password.value) { data.append('password', password.value); }
+    errorBox.classList.add('d-none');
+    busy.classList.remove('d-none');
+    submit.disabled = true;
+    fetch(window.location.pathname, {
+      method: 'POST', body: data, credentials: 'same-origin',
+      headers: {'X-Requested-With': 'fetch', 'Accept': 'application/json'},
+    }).then(function (response) {
+      return response.json().catch(function () { return {error: response.status + ' ' + response.statusText}; });
+    }).then(function (result) {
+      busy.classList.add('d-none');
+      submit.disabled = false;
+      if (result.redirect) { window.location = result.redirect; return; }
+      if (result.password_required) {
+        passwordBox.classList.remove('d-none');
+        password.focus();
+      }
+      if (result.error) {
+        errorBox.textContent = result.error;
+        errorBox.classList.remove('d-none');
+      }
+    }).catch(function (err) {
+      busy.classList.add('d-none');
+      submit.disabled = false;
+      errorBox.textContent = String(err);
+      errorBox.classList.remove('d-none');
+    });
+  });
+})();
+</script>
+{% endblock %}

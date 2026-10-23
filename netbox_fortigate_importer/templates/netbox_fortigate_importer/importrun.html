@@ -1,0 +1,201 @@
+{% extends 'generic/object.html' %}
+{% load helpers %}
+{% load render_table from django_tables2 %}
+{% load i18n %}
+
+{% block title %}{% trans "Import" %} {{ object }}{% endblock %}
+
+{% block subtitle %}
+  <div class="text-secondary d-flex flex-wrap align-items-center gap-2 mb-2">
+    {% badge object.get_status_display bg_color=object.get_status_color %}
+    {% if object.binding %}<a href="{{ object.binding.get_absolute_url }}">{{ object.binding }}</a> &middot; {{ object.binding.device|linkify }}{% endif %}
+    <span>{% blocktrans with who=object.created_by|default:_("unknown user") when=object.created|timesince %}uploaded by {{ who }}, {{ when }} ago{% endblocktrans %}</span>
+    {% if object.encrypted %}<span class="badge text-bg-blue"><i class="mdi mdi-lock"></i> {% trans "encrypted backup" %}</span>{% endif %}
+  </div>
+{% endblock %}
+
+{% block control-buttons %}
+  {% if object.status == 'parsed' and not object.binding %}
+    <a href="{% url 'plugins:netbox_fortigate_importer:importrun_bind' pk=object.pk %}" class="btn btn-primary">
+      <i class="mdi mdi-link-variant"></i> {% trans "Choose device" %}
+    </a>
+  {% endif %}
+  {% if object.status == 'planned' or object.status == 'parsed' and object.binding %}
+    <form action="{% url 'plugins:netbox_fortigate_importer:importrun_plan' pk=object.pk %}" method="post" class="d-inline">
+      {% csrf_token %}
+      <button type="submit" class="btn btn-secondary" title="{% trans 'Compare again with what NetBox has now' %}">
+        <i class="mdi mdi-refresh"></i> {% if object.status == 'planned' %}{% trans "Plan again" %}{% else %}{% trans "Plan" %}{% endif %}
+      </button>
+    </form>
+  {% endif %}
+  {% if can_apply and not active_job %}
+    <form action="{% url 'plugins:netbox_fortigate_importer:importrun_dryrun' pk=object.pk %}" method="post" class="d-inline">
+      {% csrf_token %}
+      <button type="submit" class="btn btn-info"><i class="mdi mdi-test-tube"></i> {% trans "Dry run" %}</button>
+    </form>
+    <form action="{% url 'plugins:netbox_fortigate_importer:importrun_apply' pk=object.pk %}" method="post" class="d-inline"
+          onsubmit="return confirm('{% trans "Write the approved changes to NetBox?" %}{% if summary.pending %} {% blocktrans with n=summary.pending %}{{ n }} changes are not reviewed and will be skipped.{% endblocktrans %}{% endif %}');">
+      {% csrf_token %}
+      <button type="submit" class="btn btn-success"><i class="mdi mdi-check-all"></i> {% trans "Apply" %}</button>
+    </form>
+  {% endif %}
+  {% if can_rollback and not active_job %}
+    <form action="{% url 'plugins:netbox_fortigate_importer:importrun_rollback' pk=object.pk %}" method="post" class="d-inline"
+          onsubmit="return confirm('{% trans "Undo everything this import wrote to NetBox?" %}');">
+      {% csrf_token %}
+      <button type="submit" class="btn btn-warning"><i class="mdi mdi-undo-variant"></i> {% trans "Roll back" %}</button>
+    </form>
+  {% endif %}
+  {% if object.status == 'planned' or object.status == 'parsed' %}
+    <form action="{% url 'plugins:netbox_fortigate_importer:importrun_discard' pk=object.pk %}" method="post" class="d-inline">
+      {% csrf_token %}
+      <button type="submit" class="btn btn-outline-secondary"><i class="mdi mdi-close"></i> {% trans "Discard" %}</button>
+    </form>
+  {% endif %}
+  {{ block.super }}
+{% endblock %}
+
+{% block content %}
+{% if active_job %}
+<div class="alert alert-info" role="alert">
+  <i class="mdi mdi-progress-clock"></i>
+  {% blocktrans with status=active_job.get_status_display %}A job for this import is {{ status }}.{% endblocktrans %}
+  <a href="{{ active_job.get_absolute_url }}">{% trans "Follow it" %}</a> {% trans "or reload this page." %}
+</div>
+{% endif %}
+{% if object.error %}
+<div class="alert alert-danger" role="alert"><i class="mdi mdi-alert"></i> {{ object.error }}</div>
+{% endif %}
+{% if object.status == 'superseded' %}
+<div class="alert alert-secondary" role="alert">{% trans "A newer import of this FortiGate was applied after this plan was made. Upload the file again to import it." %}</div>
+{% endif %}
+{% if object.status == 'pending-approval' %}
+<div class="alert alert-warning" role="alert">
+  <i class="mdi mdi-account-clock"></i> {% trans "Some changes wait for approval in netbox-change-approval. This page follows their decisions." %}
+</div>
+{% endif %}
+
+<div class="row mb-3">
+  <div class="col col-12 col-xl-5">
+    <div class="card">
+      <h2 class="card-header">{% trans "Configuration" %}</h2>
+      <table class="table table-hover attr-table">
+        <tr><th scope="row">{% trans "File" %}</th><td>{{ object.filename|placeholder }} <span class="text-muted small">{{ object.file_size|filesizeformat }}</span></td></tr>
+        <tr><th scope="row">{% trans "Hostname" %}</th><td>{{ object.info.hostname|placeholder }}</td></tr>
+        <tr><th scope="row">{% trans "Model" %}</th><td>{{ object.info.model_name|default:object.info.model_code|placeholder }}{% if object.info.is_vm %} <span class="badge text-bg-secondary">VM</span>{% endif %}</td></tr>
+        <tr><th scope="row">{% trans "Serial number" %}</th><td class="font-monospace">{{ object.info.serial|placeholder }}</td></tr>
+        <tr><th scope="row">{% trans "Firmware" %}</th><td>{{ object.info.version|placeholder }}{% if object.info.build %} <span class="text-muted">build {{ object.info.build }}</span>{% endif %}</td></tr>
+        <tr><th scope="row">{% trans "VDOMs" %}</th><td>{% if object.info.multi_vdom %}{% for name in object.data.vdoms %}<span class="badge text-bg-secondary">{{ name }}</span> {% endfor %}{% else %}{% trans "Single VDOM" %}{% endif %}</td></tr>
+        <tr><th scope="row">{% trans "Lines read" %}</th><td>{{ summary.stats.lines|default:object.data.stats.lines|placeholder }}</td></tr>
+        <tr><th scope="row">{% trans "Secrets removed" %}</th><td>{{ object.data.stats.secrets_removed|default:0 }} <span class="text-muted small">{% trans "never stored" %}</span></td></tr>
+        <tr><th scope="row">{% trans "SHA-256" %}</th><td class="font-monospace small text-break">{{ object.file_sha256|placeholder }}</td></tr>
+      </table>
+      <div class="card-footer text-muted small">
+        <i class="mdi mdi-shield-check-outline"></i>
+        {% trans "The file itself was not saved. Only the data above and the extracted objects are kept." %}
+      </div>
+    </div>
+    {% if object.data.stats.not_imported %}
+    <div class="card">
+      <h2 class="card-header">{% trans "Not imported" %}</h2>
+      <div class="card-body small">
+        {% for name in object.data.stats.not_imported %}<code class="me-2">{{ name }}</code>{% endfor %}
+      </div>
+    </div>
+    {% endif %}
+  </div>
+  <div class="col col-12 col-xl-7">
+    <div class="card">
+      <h2 class="card-header">{% trans "Plan" %}</h2>
+      <div class="card-body">
+        {% if object.planned %}
+          <div class="d-flex flex-wrap gap-2 mb-2">
+            {% for value, label, color, count in action_counts %}{% if count %}
+              <a href="?action={{ value }}{% if value == 'noop' %}&changed=0{% endif %}" class="badge text-bg-{{ color }} text-decoration-none fs-6">{{ label }}: {{ count }}</a>
+            {% endif %}{% endfor %}
+          </div>
+          <div class="text-muted small">
+            {% blocktrans with when=object.planned|timesince %}Planned {{ when }} ago.{% endblocktrans %}
+            {% if summary.pending %}<a href="?decision=pending"><strong>{% blocktrans with n=summary.pending %}{{ n }} need review.{% endblocktrans %}</strong></a>{% endif %}
+          </div>
+        {% else %}
+          <span class="text-muted">{% trans "Not planned yet." %}</span>
+        {% endif %}
+        {% if dry_run.counts %}
+          <hr>
+          <div>
+            <strong>{% trans "Last dry run" %}</strong>
+            {% if dry_run.failed %}<span class="badge text-bg-red">{% trans "would fail" %}</span>{% else %}<span class="badge text-bg-green">{% trans "would succeed" %}</span>{% endif %}
+            <span class="text-muted small">
+              {% for outcome, count in dry_run.counts.items %}{{ outcome|default:"—" }}: {{ count }}{% if not forloop.last %}, {% endif %}{% endfor %}
+            </span>
+            {% if dry_run.failed %}<a href="?outcome=" class="small">{% trans "See failing items below" %}</a>{% endif %}
+          </div>
+        {% endif %}
+        {% if object.applied %}
+          <hr>
+          <div class="small">
+            {% blocktrans with who=object.applied_by|default:"?" when=object.applied|timesince %}Applied by {{ who }}, {{ when }} ago.{% endblocktrans %}
+            {% if object.apply_request_id %}<a href="{% url 'core:objectchange_list' %}?request_id={{ object.apply_request_id }}">{% trans "Change log" %}</a>{% endif %}
+            {% if object.rolled_back %}&middot; {% blocktrans with when=object.rolled_back|timesince %}rolled back {{ when }} ago{% endblocktrans %}{% endif %}
+          </div>
+        {% endif %}
+      </div>
+    </div>
+    {% if summary.notes or summary.warnings %}
+    <div class="card">
+      <h2 class="card-header">{% trans "Notes" %}</h2>
+      <ul class="list-group list-group-flush small">
+        {% for note in summary.notes %}<li class="list-group-item"><i class="mdi mdi-information-outline text-info"></i> {{ note }}</li>{% endfor %}
+        {% for warning in summary.warnings|slice:":50" %}<li class="list-group-item"><i class="mdi mdi-alert-outline text-warning"></i> {{ warning }}</li>{% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+{% if object.planned %}
+<div class="card">
+  <h2 class="card-header d-flex flex-wrap align-items-center gap-2">
+    <span class="flex-grow-1">{% trans "Changes" %}</span>
+    <span class="btn-group btn-group-sm" role="group">
+      <a href="?" class="btn btn-outline-secondary{% if not request.GET %} active{% endif %}">{% trans "Changes" %}</a>
+      <a href="?decision=pending" class="btn btn-outline-secondary{% if request.GET.decision == 'pending' %} active{% endif %}">{% trans "Needs review" %}</a>
+      <a href="?action=conflict" class="btn btn-outline-secondary{% if request.GET.action == 'conflict' %} active{% endif %}">{% trans "Conflicts" %}</a>
+      <a href="?action=delete&action=deprecate" class="btn btn-outline-secondary">{% trans "Removals" %}</a>
+      <a href="?outcome=failed" class="btn btn-outline-secondary{% if request.GET.outcome == 'failed' %} active{% endif %}">{% trans "Failed" %}</a>
+      <a href="?changed=0" class="btn btn-outline-secondary{% if request.GET.changed == '0' %} active{% endif %}">{% trans "All, with unchanged" %}</a>
+    </span>
+    <form method="get" class="d-flex gap-1">
+      {% for key, values in request.GET.lists %}{% if key != 'q' and key != 'section' %}{% for value in values %}<input type="hidden" name="{{ key }}" value="{{ value }}">{% endfor %}{% endif %}{% endfor %}
+      <select name="section" class="form-select form-select-sm" onchange="this.form.submit()">
+        <option value="">{% trans "All sections" %}</option>
+        {% for section in sections %}<option value="{{ section }}"{% if request.GET.section == section %} selected{% endif %}>{{ section }}</option>{% endfor %}
+      </select>
+      <input type="search" name="q" value="{{ request.GET.q }}" class="form-control form-control-sm" placeholder="{% trans 'Search' %}">
+    </form>
+  </h2>
+  <form method="post" action="{% url 'plugins:netbox_fortigate_importer:importrun_decide' pk=object.pk %}">
+    {% csrf_token %}
+    <input type="hidden" name="return_url" value="{{ request.get_full_path }}">
+    {% for key, values in request.GET.lists %}{% for value in values %}<input type="hidden" name="f_{{ key }}" value="{{ value }}">{% endfor %}{% endfor %}
+    <div class="table-responsive">
+      {% render_table changes_table 'inc/table.html' %}
+    </div>
+    {% if can_decide %}
+    <div class="card-footer d-flex flex-wrap gap-2 align-items-center">
+      <span class="text-muted small">{% trans "Selected" %}:</span>
+      <button type="submit" name="decision" value="approved" class="btn btn-sm btn-success"><i class="mdi mdi-check"></i> {% trans "Approve" %}</button>
+      <button type="submit" name="decision" value="skipped" class="btn btn-sm btn-secondary"><i class="mdi mdi-debug-step-over"></i> {% trans "Skip" %}</button>
+      <button type="submit" name="decision" value="keep-netbox" class="btn btn-sm btn-cyan" title="{% trans 'Conflicts only' %}"><i class="mdi mdi-shield-outline"></i> {% trans "Keep NetBox" %}</button>
+      <button type="submit" name="decision" value="pending" class="btn btn-sm btn-outline-secondary">{% trans "Back to review" %}</button>
+      <span class="ms-auto"></span>
+      <button type="submit" name="decision" value="approved" class="btn btn-sm btn-outline-success"
+              onclick="this.form.scope.value='filtered'">{% trans "Approve all shown" %}</button>
+      <input type="hidden" name="scope" value="selected">
+    </div>
+    {% endif %}
+  </form>
+</div>
+{% endif %}
+{% endblock %}

@@ -134,6 +134,14 @@ class ConcurrencyTest(ImportTestCase):
 
 
 class MatchTest(ImportTestCase):
+    def test_generic_hostnames(self):
+        for name in ('FortiGate-VM64', 'FortiGate-60F', 'fortigate', 'FGT60F', 'FG100F', 'FGVM64', 'FGVM',
+                     'FortiWiFi-60F', 'FWF60F', 'FGT60FTK20012345', 'FortiGate-40F-3G4G', ''):
+            self.assertTrue(services.is_generic_hostname(name), name)
+        for name in ('HQ-FW01', 'branch-fw', 'FGT-HQ', 'fw-fgt60f', 'fortigate-02', 'FG01'):
+            self.assertFalse(services.is_generic_hostname(name), name)
+        self.assertTrue(services.is_generic_hostname('Lab', {'model_name': 'Lab'}))
+
     def test_unique_own_hostname_still_matches(self):
         binding = self.make_binding('HQ-FW01')
         binding.hostname = 'HQ-FW01'
@@ -151,11 +159,16 @@ class MatchTest(ImportTestCase):
         binding.save()
         self.assertEqual(services.find_binding({'serial': 'FGVM01', 'hostname': 'x'}), binding)
         self.assertIsNone(services.find_binding({'serial': 'FGVM02', 'hostname': 'FortiGate-VM64'}))
-        self.assertEqual(services.find_binding({'hostname': 'FortiGate-VM64'}), binding)
-        twin = self.make_binding('FortiGate-VM64 B')
-        twin.hostname = 'FortiGate-VM64'
+        # A default hostname is no proof, even when only one FortiGate has it.
+        self.assertIsNone(services.find_binding({'hostname': 'FortiGate-VM64'}))
+        named = self.make_binding('Branch-FW')
+        named.hostname = 'Branch-FW'
+        named.save()
+        self.assertEqual(services.find_binding({'hostname': 'branch-fw'}), named)
+        twin = self.make_binding('Branch-FW B')
+        twin.hostname = 'Branch-FW'
         twin.save()
-        self.assertIsNone(services.find_binding({'hostname': 'FortiGate-VM64'}), 'two have it: the user chooses')
+        self.assertIsNone(services.find_binding({'hostname': 'Branch-FW'}), 'two have it: the user chooses')
         # Offered for confirmation only when the serial does not contradict it.
         self.assertIn(binding.device, services.candidate_devices({'hostname': 'FortiGate-VM64'}))
         other = Device.objects.create(name='other', site=self.site, device_type=self.device_type, role=self.role)

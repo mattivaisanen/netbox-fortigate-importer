@@ -237,6 +237,18 @@ rollback) and unlinks the device in `detach_device()` before deleting it;
 approval plugin the device may be created later than the apply:
 `planner.attach_created_device()` links it on the next plan.
 
+NetBox's `Device.save()` creates the components of the device type
+(interface templates and so on). They did not exist when the plan was
+made, so their planned interfaces are creates. A planned create stores the
+names of its lookup fields (`proposed['lookup']`, only when the lookup is
+made of plain fields that `create` repeats). When this apply created the
+device, the applier's `made_by_netbox()` repeats the lookup of every
+planned create that hangs on that device (`device` = `Ref('device')`)
+before creating it. A match is updated instead
+(written like a create, logged as a change, tagged, and marked adopted so
+a later removal only stops managing it). Rollback deletes the device and
+with it those interfaces.
+
 ## Reviewing with dependencies
 
 Every planned change stores the keys it refers to (`depends_on`, from the

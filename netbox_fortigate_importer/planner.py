@@ -279,12 +279,16 @@ class Planner:
             return None
 
         raw, want = self.wanted(desired)
-        create = {}
+        create, lookup = {}, []
         if obj is None:
             for name, value in (desired.lookup or {}).items():
                 # Many-to-many lookups only find; the m2m values set them.
                 if '__' not in name and not model_field(desired.model, name).many_to_many:
                     create[name] = normalize(escape_literals(value))
+                    lookup.append(name)
+            if len(lookup) != len(desired.lookup or {}):
+                # Only a lookup made of plain fields can be repeated from `create`.
+                lookup = []
             for name, value in desired.create_defaults.items():
                 create[name] = normalize(escape_literals(value))
 
@@ -348,7 +352,7 @@ class Planner:
             proposed={'fields': {k: raw[k] for k in desired.fields},
                       'deferred': {k: raw[k] for k in desired.deferred},
                       'm2m': {k: raw[k] for k in desired.m2m},
-                      'create': create, 'flags': flags},
+                      'create': create, 'lookup': lookup, 'flags': flags},
             current=current, last_applied=last or {}, diff=diff, depends_on=desired.refs,
             note='; '.join(dict.fromkeys(notes))[:500],
             decision=DecisionChoices.APPROVED if auto else DecisionChoices.PENDING,

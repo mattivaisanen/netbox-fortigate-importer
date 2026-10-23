@@ -6,6 +6,11 @@ from netbox.jobs import JobRunner
 logger = logging.getLogger('netbox_fortigate_importer.jobs')
 
 
+def counts_text(counts):
+    """{'applied': 3, 'failed': 1} -> '3 applied, 1 failed'."""
+    return ', '.join(f'{n} {name}' for name, n in (counts or {}).items() if n) or 'nothing to do'
+
+
 class ImportRunJob(JobRunner):
     """One action on one import run. Shown on the run's Jobs tab."""
 
@@ -31,16 +36,16 @@ class ImportRunJob(JobRunner):
 
         if action == 'dry-run':
             applier.apply(run, user, dry_run=True, expected_plan=planned)
-            self.logger.info('Dry run: %s', run.dry_run.get('counts'))
+            self.logger.info(f'Dry run: {counts_text(run.dry_run.get("counts"))}')
         elif action == 'apply':
             applier.apply(run, user, expected_plan=planned)
             run.refresh_from_db()
-            self.logger.info('Applied: %s', run.get_status_display())
+            self.logger.info(f'Applied: {run.get_status_display()}')
             if run.status == RunStatusChoices.PLANNED and run.error:
                 self.logger.warning(run.error)
         elif action == 'rollback':
             count = rollback.rollback(run, user)
-            self.logger.info('Rolled back %s changes', count)
+            self.logger.info(f'Rolled back {count} changes')
         else:
             raise ValueError(f'unknown action {action}')
 

@@ -3,10 +3,10 @@ from unittest import mock
 
 from django.urls import reverse
 
-from dcim.models import Device, Interface
+from dcim.models import Device, Interface, InterfaceTemplate
 
-from netbox_fortigate_importer import applier, dependencies
-from netbox_fortigate_importer.jobs import ImportRunJob
+from netbox_fortigate_importer import applier, dependencies, rollback
+from netbox_fortigate_importer.jobs import ImportRunJob, counts_text
 from netbox_fortigate_importer.models import (
     ActionChoices, DecisionChoices, FortiGateBinding, ImportRun, OutcomeChoices, RunStatusChoices,
 )
@@ -159,3 +159,55 @@ class BindPageTest(ViewBase):
         self.assertContains(page, 'class="form-check-input" type="radio" name="mode"', count=2)
         self.assertContains(page, 'value="existing" checked')
         self.assertEqual(run.status, RunStatusChoices.PARSED)
+
+
+class DeviceTypeInterfacesTest(ViewBase):
+    """A new device gets the interfaces of its device type from NetBox."""
+
+    def setUp(self):
+        super().setUp()
+        for name in ('wan1', 'wan2', 'dmz', 'internal', 'ha'):
+            InterfaceTemplate.objects.create(device_type=self.device_type, name=name, type='1000base-t')
+        self.upload(read(BRANCH))
+        self.run = ImportRun.objects.get()
+        self.client.post(reverse(URL + 'importrun_bind', args=[self.run.pk]), {
+            'mode': 'new', 'name': 'branch1-fw01', 'site': self.site.pk, 'role': self.role.pk,
+        })
+        self.run.refresh_from_db()
+        self.run.changes.filter(decision=DecisionChoices.PENDING).update(decision=DecisionChoices.APPROVED)
+
+    def test_dry_run_matches_them(self):
+        results = applier.apply(self.run, self.user, dry_run=True)
+        failed = {k: r['error'] for k, r in results.items() if r['outcome'] == OutcomeChoices.FAILED}
+        self.assertEqual(failed, {})
+        self.assertEqual(results['interface/wan1']['outcome'], OutcomeChoices.APPLIED)
+        self.assertFalse(Device.objects.exists())
+
+    def test_apply_updates_them_and_rollback_removes_all(self):
+        applier.apply(self.run, self.user)
+        self.run.refresh_from_db()
+        self.assertEqual(self.run.status, RunStatusChoices.APPLIED, self.run.error)
+        device = self.run.binding.device
+        self.assertEqual(device.interfaces.filter(name='wan1').count(), 1)
+        wan1 = device.interfaces.get(name='wan1')
+        self.assertEqual(self.run.changes.get(key='interface/wan1').object_id, wan1.pk)
+        self.assertTrue(wan1.tags.exists(), 'tagged like the objects the import created')
+        # Interfaces the config does not have stay as the device type made them.
+        self.assertTrue(device.interfaces.filter(name='ha').exists())
+        # The next import plans no new interfaces.
+        self.upload(read(BRANCH))
+        again = ImportRun.objects.latest('pk')
+        self.assertFalse(again.changes.filter(section='interface', action=ActionChoices.CREATE,
+                                              key__in=['interface/wan1', 'interface/dmz']).exists())
+
+        rollback.rollback(self.run, self.user)
+        self.run.refresh_from_db()
+        self.assertEqual(self.run.status, RunStatusChoices.ROLLED_BACK, self.run.error)
+        self.assertFalse(Device.objects.exists())
+        self.assertFalse(Interface.objects.exists())
+
+
+class JobLogTest(ViewBase):
+    def test_counts_are_written_out(self):
+        self.assertEqual(counts_text({'applied': 3, 'failed': 1, 'skipped': 0}), '3 applied, 1 failed')
+        self.assertEqual(counts_text({}), 'nothing to do')

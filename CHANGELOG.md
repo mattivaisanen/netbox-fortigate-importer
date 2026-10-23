@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+## 0.6.0 (2026-10-23)
+
+Fixed:
+
+- Importing into a new device whose device type has interfaces no longer
+  fails with "Interface with this Device and Name already exists". NetBox
+  adds the device type's interfaces when it creates the device; the import
+  now matches them by name and fills them in from the configuration,
+  instead of trying to create them a second time. Interfaces of the device
+  type that the configuration does not have are left as they are. Plans
+  made with an earlier version: press Plan again before the dry run.
+- The job log of a dry run shows its counts ("40 applied, 2 failed")
+  instead of "Dry run: %s".
+
 ## 0.5.0 (2026-10-23)
 
 New:

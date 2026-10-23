@@ -38,10 +38,9 @@ the plan was made, nothing is applied until you plan again.
 ## What it reads
 
 - Plain-text backups and `show full-configuration` output, gzip-compressed
-  files, and password-encrypted backups from FortiOS up to 7.4.3 (7.2 up to
-  7.2.8). FortiOS 7.2.9, 7.4.4 and later encrypt backups differently, and
-  that format isn't public, so those files aren't supported yet: the
-  upload says so and asks for a backup saved without a password.
+  files, and password-encrypted backups from every FortiOS version,
+  including the newer encryption of FortiOS 7.2.9, 7.4.4, 7.6 and later. You
+  are asked for the password when the backup is encrypted.
 - Single-VDOM and multi-VDOM configurations, from hardware and VM models,
   FortiOS 5.4 to 7.4.
 

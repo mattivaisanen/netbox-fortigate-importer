@@ -6,11 +6,6 @@ what would change, try it with a dry run, apply it, and roll it back if
 needed. Later imports of the same firewall are delta syncs: changed and
 deleted objects wait for a person to decide.
 
-> 0.1.0 is the first release. Read its known issues in the
-> [release notes](https://github.com/mattivaisanen/netbox-fortigate-importer/releases/tag/v0.1.0)
-> before you let people import who should not be able to edit everything:
-> applying does not yet check the applying user's NetBox permissions.
-
 ## How an import works
 
 1. **Upload** under *FortiGate → New import*: drop the file on the page.

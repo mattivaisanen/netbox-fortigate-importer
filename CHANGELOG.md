@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.5.0 (2026-10-23)
+
+New:
+
+- Password-encrypted backups from FortiOS 7.2.9, 7.4.4, 7.6 and later now
+  import. These versions changed how the backup is encrypted (the
+  CVE-2024-21754 fix): a per-backup salt and a slower key derivation. The
+  importer reads both the old and the new layout, so you can upload an
+  encrypted backup from any version and are simply asked for its password.
+  0.3.0 had recognised these files and asked for an unencrypted export
+  instead; that is no longer needed.
+
 ## 0.4.0 (2026-10-23)
 
 Fixed:

@@ -189,32 +189,52 @@ class FileTests(SimpleTestCase):
         with self.assertRaisesMessage(UnsupportedFormat, 'damaged'):
             read_config_bytes(gzip.compress(b'config system global\nend\n')[:-12])
 
-    def test_new_encryption_is_named(self):
-        # FortiOS 7.2.9+, 7.4.4+ and 7.6+ derive the key differently. Without
-        # a sample, the old method is tried and its failure explained.
+    def test_format6_round_trip(self):
+        # The salt + PBKDF2 layout of FortiOS 7.2.9+, 7.4.4+ and 7.6+.
         text = read(BRANCH).decode()
-        for major, minor, build in ((7, 4, 2662), (7, 4, 2726), (7, 2, 1688), (7, 6, 3401), (8, 0, 100)):
+        for major, minor, build in ((7, 4, 2662), (7, 2, 1688), (7, 6, 3401), (8, 0, 100)):
             with self.subTest(version=(major, minor, build)):
-                data = encrypt_backup(text, 'pw', major=major, minor=minor, build=build)
-                with self.assertRaisesMessage(UnsupportedEncryption, f'FortiOS {major}.{minor} (build {build})'):
-                    read_config_bytes(data, 'wrong')
-                # A file that still uses the old method keeps working.
+                data = encrypt_backup(text, 'pw', major=major, minor=minor, build=build, fmt=6)
                 self.assertEqual(read_config_bytes(data, 'pw'), text)
-
-    def test_old_encryption_wrong_password(self):
-        text = read(BRANCH).decode()
-        for major, minor, build in ((7, 4, 2573), (7, 2, 1639), (7, 0, 9999), (6, 4, 2000)):
-            with self.subTest(version=(major, minor, build)):
-                data = encrypt_backup(text, 'pw', major=major, minor=minor, build=build)
-                with self.assertRaises(DecryptionError) as ctx:
+                with self.assertRaises(DecryptionError):
                     read_config_bytes(data, 'wrong')
-                self.assertNotIn('not supported', str(ctx.exception))
 
-    def test_unknown_build_hints(self):
-        data = encrypt_backup('config system global\nend\n', 'pw', minor=4)
-        data = data.replace(b'|1639|', b'|x|', 1)
-        with self.assertRaisesMessage(DecryptionError, 'may come from FortiOS 7.2.9, 7.4.4 or later'):
-            read_config_bytes(data, 'wrong')
+    def test_both_formats_decrypt_regardless_of_header_version(self):
+        # The header's format field picks which layout to try first, but a
+        # mismatched version still decrypts because both layouts are tried.
+        text = read(BRANCH).decode()
+        old = encrypt_backup(text, 'pw', major=7, minor=4, build=2933, fmt=4)
+        new = encrypt_backup(text, 'pw', major=7, minor=2, build=1639, fmt=6)
+        self.assertEqual(read_config_bytes(old, 'pw'), text)
+        self.assertEqual(read_config_bytes(new, 'pw'), text)
+
+    def test_format6_salt_is_per_backup(self):
+        text = read(BRANCH).decode()
+        a = encrypt_backup(text, 'pw', fmt=6)
+        b = encrypt_backup(text, 'pw', fmt=6)
+        self.assertNotEqual(a, b)  # random salt and nonce each time
+        self.assertEqual(read_config_bytes(a, 'pw'), read_config_bytes(b, 'pw'))
+
+    def test_format6_vector_pins_kdf(self):
+        # A frozen format-6 blob (fixed salt and nonce) locks the layout and
+        # the PBKDF2 parameters: a change to the salt length, the 4096 rounds
+        # or SHA-256 would stop this decrypting.
+        blob = bytes.fromhex(
+            '234647424b7c367c4647543630467c377c30347c323933337c0a000102030405'
+            '060708090a0b0c0d0e0f101112131415161718191a1b819a4e80ea6a1372d5e5'
+            '04080f308455f006787759c74f2734f58d7317ead9a2710e48e6393fe6b69cc1'
+            'a4a58c81a4c3f82ea6dd651ccb46b3d5512ada7e8bda72a448fdc0fbb5177d8f'
+            '47c2f5')
+        self.assertEqual(
+            read_config_bytes(blob, 'test-pass'),
+            'config system global\nset hostname fw\nend\n')
+
+    def test_newer_format_is_named(self):
+        # A header format newer than any we know, that neither layout reads.
+        import os
+        blob = b'#FGBK|9|FG120G|7|06|9999|\n' + os.urandom(80)
+        with self.assertRaisesMessage(UnsupportedEncryption, 'newer encrypted format (version 9)'):
+            read_config_bytes(blob, 'pw')
 
     def test_truncated_encrypted(self):
         with self.assertRaises(UnsupportedFormat):

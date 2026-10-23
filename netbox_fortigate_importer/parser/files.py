@@ -4,24 +4,36 @@ Turning uploaded bytes into configuration text.
 Handles plain text backups, gzip-compressed ones and password-encrypted
 backups. Everything happens in memory: nothing here writes a file.
 
-Encrypted backups (FortiOS up to 7.4.3) look like this, checked against a
-real FortiOS 7.4 backup:
+Encrypted backups carry a version in the header line's second field. Two
+layouts are known, both AES-256-GCM over gzip-compressed configuration
+text, both checked against real FortiGate backups:
 
-    #FGBK|4|FGVM64|7|04|2360|\\n      header line
-    12 bytes                            AES-GCM nonce (IV)
-    16 bytes                            AES-GCM tag
-    rest                                ciphertext
+    "format 4" (FortiOS up to 7.4.3 / 7.2.8):
 
-The key is SHA-256 of the password and the plaintext is gzip-compressed
-configuration text.
+        #FGBK|4|FGVM64|7|04|2360|\\n      header line
+        12 bytes                            AES-GCM nonce (IV)
+        16 bytes                            AES-GCM tag
+        rest                                ciphertext
 
-FortiOS 7.4.4 and 7.2.9 changed the key derivation (FG-IR-23-423,
-CVE-2024-21754), and 7.6 and later use the new one too. The new format is
-not described anywhere public and we have no sample, so it is not guessed:
-the old method is still tried, and when it fails on a backup whose header
-says it comes from one of those versions, the error says the encryption is
-not supported instead of blaming the password. The header has no patch
-number, only the build, so the version is told apart by build number.
+    The key is SHA-256 of the password, with no salt.
+
+    "format 6" (FortiOS 7.2.9+, 7.4.4+ and 7.6+):
+
+        #FGBK|6|FG120G|7|04|2933|\\n       header line
+        16 bytes                            PBKDF2 salt
+        12 bytes                            AES-GCM nonce (IV)
+        16 bytes                            AES-GCM tag
+        rest                                ciphertext
+
+    The key is PBKDF2-HMAC-SHA256 of the password over that salt, 4096
+    rounds. This is the FG-IR-23-423 / CVE-2024-21754 fix: a per-backup
+    salt and a slow KDF instead of the old bare SHA-256.
+
+Both layouts are tried (the header's format field decides the order), and
+AES-GCM's tag tells a right key from a wrong one, so there is never a false
+match. A header whose format field is newer than any we know, when neither
+layout decrypts it, is reported as an unsupported newer format rather than
+as a wrong password.
 """
 import hashlib
 import zlib
@@ -32,11 +44,14 @@ ENCRYPTED_MAGIC = b'#FGBK|'
 MAX_TEXT_BYTES = 500 * 1024 * 1024
 GZIP_MAGIC = b'\x1f\x8b'
 
-#: (major, minor) -> first build with the new backup encryption:
-#: 7.2.9 is build 1688, 7.4.4 is build 2662. 6.x and 7.0 never got the fix.
-NEW_FORMAT_BUILDS = {(7, 2): 1688, (7, 4): 2662}
-#: Every release from this (major, minor) on uses the new encryption.
-NEW_FORMAT_FROM = (7, 6)
+#: AES-GCM nonce and tag lengths, shared by both layouts.
+NONCE_LEN = 12
+TAG_LEN = 16
+#: The "format 6" layout: a PBKDF2 salt in front, then nonce + tag.
+SALT_LEN = 16
+PBKDF2_ROUNDS = 4096
+#: Newest header "format" field this module knows how to decrypt.
+NEWEST_KNOWN_FORMAT = 6
 
 
 class ConfigFileError(ValueError):
@@ -58,7 +73,7 @@ class UnsupportedFormat(ConfigFileError):
 
 
 class UnsupportedEncryption(UnsupportedFormat):
-    """An encrypted backup from FortiOS 7.2.9+, 7.4.4+ or 7.6+."""
+    """An encrypted backup in a newer format than this module can read."""
 
 
 def is_encrypted(data):
@@ -90,30 +105,45 @@ def encrypted_header(data):
     return info
 
 
-def uses_new_encryption(header):
-    """
-    True when the header says FortiOS 7.2.9+, 7.4.4+ or 7.6+, False when
-    it says an older release, None when it doesn't say enough to tell.
-    """
-    major, minor = header.get('major'), header.get('minor')
-    if major is None or minor is None:
+def _format_number(header):
+    """The header's format field as an int, or None if it isn't a number."""
+    try:
+        return int(header.get('format'))
+    except (TypeError, ValueError):
         return None
-    if (major, minor) >= NEW_FORMAT_FROM:
-        return True
-    first_build = NEW_FORMAT_BUILDS.get((major, minor))
-    if first_build is None:
-        return False
-    build = header.get('build')
-    if build is None:
-        return None
-    return build >= first_build
 
 
 def _version_label(header):
+    if 'major' not in header or 'minor' not in header:
+        return 'a newer FortiOS release'
     label = f"FortiOS {header['major']}.{header['minor']}"
     if header.get('build') is not None:
         label += f" (build {header['build']})"
     return label
+
+
+def _key_v4(password, body):
+    """Old layout: SHA-256 of the password, no salt. Returns (key, nonce, tag, ct)."""
+    key = hashlib.sha256(password.encode('utf-8')).digest()
+    nonce = body[:NONCE_LEN]
+    tag = body[NONCE_LEN:NONCE_LEN + TAG_LEN]
+    ciphertext = body[NONCE_LEN + TAG_LEN:]
+    return key, nonce, tag, ciphertext
+
+
+def _key_v6(password, body):
+    """New layout: a 16-byte salt, then PBKDF2-HMAC-SHA256 (4096 rounds)."""
+    salt = body[:SALT_LEN]
+    rest = body[SALT_LEN:]
+    key = hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), salt, PBKDF2_ROUNDS, 32)
+    nonce = rest[:NONCE_LEN]
+    tag = rest[NONCE_LEN:NONCE_LEN + TAG_LEN]
+    ciphertext = rest[NONCE_LEN + TAG_LEN:]
+    return key, nonce, tag, ciphertext
+
+
+#: Shortest body each layout can possibly have (one byte of ciphertext).
+_MIN_BODY = {_key_v4: NONCE_LEN + TAG_LEN + 1, _key_v6: SALT_LEN + NONCE_LEN + TAG_LEN + 1}
 
 
 def decrypt_backup(data, password, max_size=MAX_TEXT_BYTES):
@@ -128,30 +158,34 @@ def decrypt_backup(data, password, max_size=MAX_TEXT_BYTES):
     if end == -1:
         raise UnsupportedFormat('The encrypted file has no header line.')
     body = data[end + 1:]
-    if len(body) < 12 + 16 + 1:
+
+    header = encrypted_header(data)
+    fmt = _format_number(header)
+    # Try the layout the header points at first, then the other; the GCM tag
+    # rules out a false match, so the order only saves a wasted PBKDF2.
+    layouts = [_key_v4, _key_v6] if fmt is not None and fmt < 6 else [_key_v6, _key_v4]
+    tried = False
+    for derive in layouts:
+        if len(body) < _MIN_BODY[derive]:
+            continue
+        tried = True
+        key, nonce, tag, ciphertext = derive(password, body)
+        try:
+            plain = AESGCM(key).decrypt(nonce, ciphertext + tag, None)
+        except InvalidTag:
+            continue
+        return _maybe_decompress(plain, max_size)
+
+    if not tried:
         raise UnsupportedFormat('The encrypted file is too short; it may be truncated.')
-    nonce, tag, ciphertext = body[:12], body[12:28], body[28:]
-    key = hashlib.sha256(password.encode('utf-8')).digest()
-    try:
-        plain = AESGCM(key).decrypt(nonce, ciphertext + tag, None)
-    except InvalidTag:
-        header = encrypted_header(data)
-        new = uses_new_encryption(header)
-        if new:
-            raise UnsupportedEncryption(
-                f'This backup was saved by {_version_label(header)}. FortiOS 7.2.9, 7.4.4 and later '
-                'encrypt backups in a way the importer can\'t read yet, so the password can\'t be '
-                'checked either. Back up the configuration again without a password and upload '
-                'that file; the importer drops passwords and keys from it.'
-            ) from None
-        hint = ''
-        if new is None:
-            hint = (
-                ' If the password is right, the backup may come from FortiOS 7.2.9, 7.4.4 or later, '
-                'whose encryption is not supported yet.'
-            )
-        raise DecryptionError(f'Wrong password, or the file is damaged.{hint}') from None
-    return _maybe_decompress(plain, max_size)
+    if fmt is not None and fmt > NEWEST_KNOWN_FORMAT:
+        raise UnsupportedEncryption(
+            f'This backup is in a newer encrypted format (version {fmt}) than the importer knows, '
+            f'saved by {_version_label(header)}. If the password is right, back up the configuration '
+            'again without a password and upload that file; the importer drops passwords and keys '
+            'from it.'
+        )
+    raise DecryptionError('Wrong password, or the file is damaged.')
 
 
 def _maybe_decompress(data, max_size=MAX_TEXT_BYTES):

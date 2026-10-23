@@ -101,10 +101,15 @@ and with all of them installed.
   the importer owns only its platform, serial, config context key
   `fortigate`, virtual chassis fields and primary IPv4.
 - **Not taken over:** an existing object assigned to another device or VM
-  (an IP on another firewall's interface) is never adopted; a new one is
-  planned (`Planner.assigned_elsewhere()`).
+  (an IP on another firewall's interface), or one another FortiGate
+  manages, is never adopted; it is left out with a note
+  (`Planner.assigned_elsewhere()`). Creating a duplicate would fail
+  NetBox's `ENFORCE_GLOBAL_UNIQUE`.
+- **Adopted objects are only released:** `@meta.adopted` marks objects
+  that existed before the importer took them over; a removal stops
+  managing them instead of deleting.
 - **Nothing removed from an incomplete file:** when the parser reports a
-  truncated file, or a VDOM of a managed object is missing, the plan holds
+  truncated file (`ParseResult.truncated`, saved as `data['truncated']`), or a VDOM of a managed object is missing, the plan holds
   those removals back with a note.
 - **Decisions survive re-planning** for rows whose action, values and diff
   are unchanged (`carry_decisions()`).
@@ -245,7 +250,9 @@ the user, so change-approval decides like for any edit:
   the item applied and confirms the record; rejected or withdrawn marks it
   rejected and restores the record, so the next import proposes it again.
 - Rollback withdraws the run's pending requests.
-- Dry runs don't go through change-approval.
+- Dry runs go through the gate too, so they show what would wait for
+  approval; the change set is not submitted and everything rolls back
+  (change-approval only notifies after commit).
 
 ## Tests
 

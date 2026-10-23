@@ -49,15 +49,19 @@ def ingest(data: bytes, filename, user, password=None):
 
 def find_binding(info):
     """
-    The FortiGate a configuration belongs to, by serial number only. A
-    hostname is no proof: default names (FortiGate-VM64, FGT60F) repeat, and
-    a wrong match plans deletes on another firewall. Hostname matches are
-    offered on the device choice page instead, for the user to confirm.
+    The FortiGate a configuration belongs to: same serial number, else the
+    only FortiGate with the same hostname (and no other serial number).
+    With none or several, the user chooses on the device choice page.
     """
     serial = info.get('serial')
     if serial:
-        return FortiGateBinding.objects.filter(serial=serial).first()
-    return None
+        binding = FortiGateBinding.objects.filter(serial=serial).first()
+        if binding:
+            return binding
+    if not info.get('hostname'):
+        return None
+    found = list(bindings_by_hostname(info)[:2])
+    return found[0] if len(found) == 1 else None
 
 
 def bindings_by_hostname(info):

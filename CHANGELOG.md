@@ -20,9 +20,10 @@ Fixed:
   who could apply imports could create, change and delete any object
   through an import, also on sites their permissions exclude. The device
   choice only offers devices, sites and roles the user may see.
-- A configuration is matched to a FortiGate by serial number only. A
-  matching hostname (default names like FortiGate-VM64 repeat) is offered
-  on the device choice page instead of being planned against right away.
+- A configuration is no longer matched to another FortiGate by hostname
+  when their serial numbers differ. A hostname matches only when exactly
+  one FortiGate has it; otherwise the device choice page suggests the
+  matches and you choose.
 - Rollback refuses when deleting an imported object would also delete
   later work, such as an IP address someone added to an imported interface.
 - Deleting an object the firewall no longer has fails, with a list, when it
@@ -33,10 +34,14 @@ Fixed:
   FortiGate no longer apply at the same time.
 - Changing decisions clears the last dry run, which no longer matches.
 - The review page only returns to addresses on this NetBox after a decision.
-- A configuration that looks truncated, or lacks VDOMs that earlier imports
-  had, no longer proposes deleting what is missing; the plan says why.
-- IP addresses assigned to another device are no longer taken over (branches
-  that reuse the same subnets); a new address is proposed instead.
+- A configuration that looks truncated (also when it has many other
+  warnings), or lacks VDOMs that earlier imports had, no longer proposes deleting what is missing; the plan says why.
+- IP addresses on another device, and DHCP ranges, reservations and VRRP
+  addresses another FortiGate manages, are no longer taken over (branches
+  that reuse the same subnets). They are left out with a note suggesting a
+  VRF per firewall.
+- An object that existed in NetBox before an import adopted it is kept
+  (only no longer managed) when the firewall drops it, instead of deleted.
 - Planning again keeps the review decisions of items that did not change.
 - Dry runs show what would wait for approval with netbox-change-approval.
 - Fields written last (primary IP, virtual chassis master) that were not

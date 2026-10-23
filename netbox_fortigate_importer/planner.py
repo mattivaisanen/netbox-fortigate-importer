@@ -30,7 +30,9 @@ from django.utils import timezone
 
 from .jobs import busy
 from .mappers import Context, collect
-from .mappers.base import Ref, escape_literals, model_field, model_label, normalize, read_field, read_m2m, snapshot, sort_values
+from .mappers.base import (
+    Ref, escape_literals, model_field, model_label, normalize, read_field, read_m2m, snapshot, sort_values,
+)
 from .models import ActionChoices, DecisionChoices, ImportRun, ManagedObject, PlannedChange, RunStatusChoices
 
 #: Key in ManagedObject.fields holding the importer's notes about the object.
@@ -97,6 +99,8 @@ class Planner:
         #: (model label, pk) -> key, to not adopt one object for two keys.
         self.claimed = {}
         self.notes = []
+        #: key -> the other FortiGate or device that has the object.
+        self.skipped_elsewhere = {}
 
     # Values
 
@@ -177,7 +181,10 @@ class Planner:
         """
         assigned = getattr(obj, 'assigned_object', None)
         if assigned is None:
-            return ''
+            # Not assigned to anything (a DHCP range or reservation): another
+            # FortiGate's if that one manages it.
+            others = self.other_managers(obj)
+            return f'FortiGate {", ".join(others)}' if others else ''
         device_id = getattr(assigned, 'device_id', None)
         if device_id is not None:
             if device_id == self.binding.device_id:
@@ -186,7 +193,8 @@ class Planner:
         machine = getattr(assigned, 'virtual_machine', None)
         if machine is not None:
             return str(machine)
-        return ''
+        others = self.other_managers(obj)  # e.g. a VRRP address of another firewall's group
+        return f'FortiGate {", ".join(others)}' if others else ''
 
     def other_managers(self, obj):
         ct = ContentType.objects.get_for_model(obj)
@@ -234,7 +242,9 @@ class Planner:
 
     def truncated(self):
         """The parser said the file ends early: what is missing may just be cut off."""
-        return any('may be truncated' in w for w in (self.run.data or {}).get('warnings', []))
+        data = self.run.data or {}
+        # Runs saved before the flag existed only have the warning.
+        return bool(data.get('truncated')) or any('may be truncated' in w for w in data.get('warnings', []))
 
     def find_one(self, desired):
         """(object, how, notes) for one desired object; records its pk."""
@@ -243,8 +253,10 @@ class Planner:
         if obj is not None and how == 'adopt' and not (desired.shared or desired.release_only):
             owner = self.assigned_elsewhere(obj)
             if owner:
-                notes.append(f'NetBox has it on {owner}, another device; not taken over, a new one is created')
-                obj, how = None, 'new'
+                # Not taken over, and not duplicated either: NetBox refuses
+                # duplicate addresses outside VRFs by default.
+                self.skipped_elsewhere[desired.key] = owner
+                return None, 'elsewhere', notes
         if obj is not None:
             claim = (model_label(desired.model), obj.pk)
             if claim in self.claimed and not desired.partial:
@@ -257,6 +269,10 @@ class Planner:
 
     def plan_one(self, desired, order, obj, how, notes):
         managed = self.managed.get(desired.key)
+        if how == 'elsewhere':
+            self.notes.append(f'{desired.label}: NetBox has it on {self.skipped_elsewhere[desired.key]}, not this '
+                              'firewall; left out. Give each firewall its own VRF to import overlapping addresses.')
+            return None
         note = notes[-1] if notes else ''
         if obj is None and desired.partial:
             self.notes.append(f'{desired.label}: {note or "not found"}, skipped')
@@ -364,6 +380,9 @@ class Planner:
         elif 'shared' in flags and self.other_managers(obj):
             action, auto = ActionChoices.UNMANAGE, True
             note = f'kept: still managed by {", ".join(self.other_managers(obj))}'
+        elif meta.get('adopted'):
+            action, auto = ActionChoices.UNMANAGE, True
+            note = 'existed in NetBox before the import adopted it: kept, no longer managed'
         else:
             setting = self.options['default_delete_action']
             if setting == 'unmanage':

@@ -239,9 +239,12 @@ class Applier:
                 values[name] = earlier[name]
         for name, value in proposed.get('m2m', {}).items():
             values[name] = sort_values(self.resolve(value))
+        earlier_meta = earlier.get(META) or {}
         values[META] = {
             'label': row.label, 'section': row.section, 'vdom': row.vdom, 'order': row.order,
             'flags': proposed.get('flags', []), 'model': row.object_type.natural_key(),
+            # Made by someone else first: a removal only stops managing it.
+            'adopted': row.action == ActionChoices.ADOPT or bool(earlier_meta.get('adopted')),
         }
         return values
 

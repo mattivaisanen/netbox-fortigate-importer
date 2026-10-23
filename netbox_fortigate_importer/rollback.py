@@ -56,7 +56,10 @@ def later_edits(run, changes=None):
     last = max(change.time for change in changes)
     objects = {(c.changed_object_type_id, c.changed_object_id) for c in changes}
     found = []
-    later = ObjectChange.objects.filter(time__gt=last).exclude(request_id=run.apply_request_id)
+    later = ObjectChange.objects.filter(
+        time__gt=last, changed_object_type_id__in={t for t, _ in objects},
+        changed_object_id__in={i for _, i in objects},
+    ).exclude(request_id=run.apply_request_id)
     for change in later.order_by('time'):
         if (change.changed_object_type_id, change.changed_object_id) in objects:
             found.append((change.object_repr, change.user_name, change.time))
@@ -140,20 +143,6 @@ def rollback(run, user):
 
     if not run.can_rollback:
         raise RollbackError(f'A run that is "{run.get_status_display()}" cannot be rolled back.')
-    changes = _changes(run)
-    missing = missing_entries(run, changes)
-    if missing:
-        raise RollbackError(
-            f'NetBox\'s change log no longer has what this import wrote ({missing} objects missing; '
-            'change log retention may have removed it). Rolling back would only forget the objects.')
-    edits = later_edits(run, changes)
-    if edits:
-        names = ', '.join(sorted({repr_ for repr_, _, _ in edits})[:10])
-        raise RollbackError(f'Changed in NetBox after this import, so rollback would overwrite newer work: {names}')
-    newer = run.binding.runs.filter(applied__gt=run.applied).exclude(pk=run.pk) if run.binding_id else None
-    if newer is not None and newer.exclude(status=RunStatusChoices.ROLLED_BACK).exists():
-        raise RollbackError('A later import of this FortiGate was applied. Roll that one back first.')
-
     request_id = uuid.uuid4()
     request = fake_request(user, request_id)
     with apply_request_processors(request):
@@ -164,6 +153,21 @@ def rollback(run, user):
             locked = type(run).objects.select_for_update().get(pk=run.pk)
             if not locked.can_rollback:
                 raise RollbackError(f'A run that is "{locked.get_status_display()}" cannot be rolled back.')
+            # Checked under the lock, so nothing changes between check and undo.
+            changes = _changes(run)
+            missing = missing_entries(run, changes)
+            if missing:
+                raise RollbackError(
+                    f'NetBox\'s change log no longer has what this import wrote ({missing} objects missing; '
+                    'change log retention may have removed it). Rolling back would only forget the objects.')
+            edits = later_edits(run, changes)
+            if edits:
+                names = ', '.join(sorted({repr_ for repr_, _, _ in edits})[:10])
+                raise RollbackError('Changed in NetBox after this import, so rollback would overwrite newer '
+                                    f'work: {names}')
+            newer = run.binding.runs.filter(applied__gt=run.applied).exclude(pk=run.pk) if run.binding_id else None
+            if newer is not None and newer.exclude(status=RunStatusChoices.ROLLED_BACK).exists():
+                raise RollbackError('A later import of this FortiGate was applied. Roll that one back first.')
             withdraw_requests(run, user)
             detach_device(run, changes)
             created = created_objects(changes)

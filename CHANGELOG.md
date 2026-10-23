@@ -13,6 +13,17 @@ Fixed:
   device choice page suggests the matches instead. Own hostnames still
   match as before.
 
+## 0.3.0 (2026-10-23)
+
+Fixed:
+
+- Uploading a password-encrypted backup from FortiOS 7.2.9, 7.4.4 or later
+  no longer says "wrong password". Those versions encrypt backups in a way
+  the importer can't read yet, and the message now says so, names the
+  version, and asks for a backup saved without a password instead of
+  asking for the password again. Backups from 7.2.0 to 7.2.8 and 7.4.0 to
+  7.4.3 no longer get a misleading hint about the new encryption.
+
 ## 0.2.0 (2026-10-23)
 
 New:

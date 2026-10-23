@@ -28,6 +28,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.db import models, transaction
 from django.utils import timezone
 
+from .jobs import busy
 from .mappers import Context, collect
 from .mappers.base import Ref, model_field, model_label, normalize, read_field, read_m2m, snapshot, sort_values
 from .models import ActionChoices, DecisionChoices, ImportRun, ManagedObject, PlannedChange, RunStatusChoices
@@ -391,6 +392,8 @@ def plan(run: ImportRun):
         raise PlanError('Choose the NetBox device this configuration belongs to first.')
     if not run.is_idle or run.status not in (RunStatusChoices.PARSED, RunStatusChoices.PLANNED):
         raise PlanError(f'A run that is "{run.get_status_display()}" cannot be planned again.')
+    if busy(run):
+        raise PlanError('This run has a job queued or running. Plan again when it has finished.')
     attach_created_device(run.binding)
     planner = Planner(run)
     ctx = Context(binding=run.binding, data=run.data, options=planner.options)
@@ -398,6 +401,12 @@ def plan(run: ImportRun):
     rows = planner.build(desired)
     notes = ctx.notes + planner.notes
     with transaction.atomic():
+        # An apply or rollback holds this lock while it runs; once it is
+        # free, the run may have changed.
+        locked = ImportRun.objects.select_for_update().get(pk=run.pk)
+        if locked.status not in (RunStatusChoices.PARSED, RunStatusChoices.PLANNED) or busy(locked):
+            raise PlanError('This run has a job queued or running, or was applied meanwhile; it cannot be '
+                            'planned again now.')
         run.changes.all().delete()
         PlannedChange.objects.bulk_create(rows)
         run.options = planner.options

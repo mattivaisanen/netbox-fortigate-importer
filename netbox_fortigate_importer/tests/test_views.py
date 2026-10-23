@@ -237,6 +237,21 @@ class ViewTest(ViewBase):
                          .exclude(decision=DecisionChoices.APPROVED).exists())
         self.assertEqual(self.client.get(change.get_absolute_url()).status_code, 200)
 
+    def test_decisions_clear_the_dry_run_and_stay_on_this_site(self):
+        device = Device.objects.create(name='b1', site=self.site, device_type=self.device_type, role=self.role)
+        FortiGateBinding.objects.create(name='Branch', device=device, serial='FGT60FTK21005678')
+        self.upload(read(BRANCH))
+        run = ImportRun.objects.get()
+        ImportRun.objects.filter(pk=run.pk).update(dry_run={'counts': {'applied': 1}})
+        change = run.changes.get(key='interface/wan1')
+        response = self.client.post(reverse(URL + 'importrun_decide', args=[run.pk]), {
+            'pk': [change.pk], 'decision': DecisionChoices.SKIPPED, 'scope': 'selected',
+            'return_url': 'https://evil.example/',
+        })
+        self.assertRedirects(response, run.get_absolute_url(), fetch_redirect_response=False)
+        run.refresh_from_db()
+        self.assertEqual(run.dry_run, {})
+
     def test_list_and_detail_pages(self):
         device = Device.objects.create(name='b1', site=self.site, device_type=self.device_type, role=self.role)
         binding = FortiGateBinding.objects.create(name='Branch', device=device, serial='FGT60FTK21005678')
@@ -304,7 +319,7 @@ class APITest(ViewBase):
         permission.users.add(user)
         self.client.force_login(user)
         url = reverse('plugins-api:netbox_fortigate_importer-api:importrun-dry-run', args=[run.pk])
-        with mock.patch('netbox_fortigate_importer.api.views.ImportRunJob.enqueue') as enqueue:
+        with mock.patch('netbox_fortigate_importer.jobs.ImportRunJob.enqueue') as enqueue:
             enqueue.return_value.pk = 1
             enqueue.return_value.get_absolute_url.return_value = '/'
             response = self.client.post(url)

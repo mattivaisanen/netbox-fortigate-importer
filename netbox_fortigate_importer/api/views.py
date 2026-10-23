@@ -14,7 +14,8 @@ from netbox.api.authentication import TokenPermissions
 from netbox.api.viewsets import NetBoxModelViewSet, NetBoxReadOnlyModelViewSet
 
 from .. import filtersets, planner, services
-from ..jobs import ImportRunJob, active_job
+from .. import jobs
+from ..jobs import active_job
 from ..mappers import MapperError
 from ..models import FortiGateBinding, ImportRun, PlannedChange, RunStatusChoices
 from ..parser import ParseError
@@ -125,7 +126,7 @@ class ImportRunViewSet(NetBoxReadOnlyModelViewSet):
             raise ValidationError({'detail': 'This run already has a job queued or running.'})
         if not allowed(run):
             raise ValidationError({'detail': f'Not possible while the run is "{run.get_status_display()}".'})
-        job = ImportRunJob.enqueue(instance=run, user=request.user, action=name)
+        job = jobs.enqueue(run, request.user, name)
         return Response({'job': job.pk, 'job_url': job.get_absolute_url()}, status=status.HTTP_202_ACCEPTED)
 
     @action(detail=True, methods=['post'], url_path='dry-run', permission_classes=[RunActionPermissions])
@@ -151,7 +152,7 @@ class PlannedChangeViewSet(NetBoxReadOnlyModelViewSet):
         if not request.user.has_perm('netbox_fortigate_importer.change_plannedchange'):
             raise PermissionDenied()
         change = self.get_object()
-        if change.run.status != RunStatusChoices.PLANNED:
+        if change.run.status != RunStatusChoices.PLANNED or jobs.busy(change.run):
             raise ValidationError({'decision': 'The run is not ready for review.'})
         serializer = self.get_serializer(change, data={'decision': request.data.get('decision')}, partial=True)
         serializer.is_valid(raise_exception=True)
@@ -160,4 +161,5 @@ class PlannedChangeViewSet(NetBoxReadOnlyModelViewSet):
             change.decided_by = request.user
             change.full_clean()
             change.save(update_fields=['decision', 'decided_by'])
+            ImportRun.objects.filter(pk=change.run_id).update(dry_run={})
         return Response(self.get_serializer(change).data)

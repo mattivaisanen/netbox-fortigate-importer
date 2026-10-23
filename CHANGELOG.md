@@ -53,3 +53,20 @@ Fixed:
 - Uploads through the REST API with a browser session stay in memory too.
 - REST API plan, dry run, apply and rollback work for users who may apply or
   roll back but not upload.
+- Apply and rollback respect the user's NetBox permissions. Before, a user
+  who could apply imports could create, change and delete any object
+  through an import, also on sites their permissions exclude. The device
+  choice only offers devices, sites and roles the user may see.
+- A configuration is matched to a FortiGate by serial number only. A
+  matching hostname (default names like FortiGate-VM64 repeat) is offered
+  on the device choice page instead of being planned against right away.
+- Rollback refuses when deleting an imported object would also delete
+  later work, such as an IP address someone added to an imported interface.
+- Deleting an object the firewall no longer has fails, with a list, when it
+  would also delete objects the import does not delete; choose "stop
+  managing" or move them first.
+- While a dry run, apply or rollback is queued or running, the run cannot be
+  planned again, decided or discarded, and two imports of the same
+  FortiGate no longer apply at the same time.
+- Changing decisions clears the last dry run, which no longer matches.
+- The review page only returns to addresses on this NetBox after a decision.

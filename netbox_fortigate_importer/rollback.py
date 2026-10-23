@@ -22,7 +22,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from . import integrations
-from .applier import error_text, fake_request
+from .applier import cascade_victims, error_text, fake_request, require
 from .models import FortiGateBinding, ManagedObject, OutcomeChoices, PlannedChange, RunStatusChoices
 
 
@@ -63,7 +63,19 @@ def later_edits(run, changes=None):
     return found
 
 
-def _undo(change):
+def created_objects(changes):
+    """(content type pk, pk) of every object the import created."""
+    from core.choices import ObjectChangeActionChoices as Action
+
+    return {(c.changed_object_type_id, c.changed_object_id) for c in changes if c.action == Action.ACTION_CREATE}
+
+
+def _undo(change, user, created=frozenset()):
+    """
+    Undo one change log entry as `user` (their NetBox permissions apply).
+    Deleting a created object must not take anything else with it that the
+    import did not create (an IP someone added to an imported interface).
+    """
     from core.choices import ObjectChangeActionChoices as Action
     from utilities.serialization import deserialize_object
 
@@ -71,18 +83,30 @@ def _undo(change):
     current = model.objects.filter(pk=change.changed_object_id).first()
     if change.action == Action.ACTION_CREATE:
         if current is not None:
+            require(user, current, 'delete')
+            victims = cascade_victims(current, created)
+            if victims:
+                raise RollbackError(
+                    f'{change.object_repr}: deleting it would also delete newer work: {", ".join(victims)}. '
+                    'Remove or move those first.')
             current.snapshot()
             current.delete()
         return
     if not change.prechange_data:
         raise RollbackError(f'{change.object_repr}: the change log has no earlier data to restore')
     restored = deserialize_object(model, change.prechange_data, pk=change.changed_object_id)
-    if current is not None:
+    if current is None:
+        action = 'add'
+        require(user, model(), action)  # the model permission; constraints once saved
+    else:
+        action = 'change'
+        require(user, current, action)
         restored.object._state.adding = False
         restored.object._state.db = current._state.db
         restored.object._prechange_snapshot = current.serialize_object()
     restored.object.full_clean()
     restored.save()
+    require(user, model.objects.get(pk=change.changed_object_id), action)
 
 
 def withdraw_requests(run, user):
@@ -118,11 +142,18 @@ def rollback(run, user):
     request = fake_request(user, request_id)
     with apply_request_processors(request):
         with transaction.atomic():
+            # Wait for an apply or rollback of the same FortiGate, then look again.
+            if run.binding_id:
+                list(FortiGateBinding.objects.select_for_update().filter(pk=run.binding_id).values_list('pk'))
+            locked = type(run).objects.select_for_update().get(pk=run.pk)
+            if not locked.can_rollback:
+                raise RollbackError(f'A run that is "{locked.get_status_display()}" cannot be rolled back.')
             withdraw_requests(run, user)
             detach_device(run, changes)
+            created = created_objects(changes)
             for change in changes:
                 try:
-                    _undo(change)
+                    _undo(change, user, created)
                 except RollbackError:
                     raise
                 except Exception as exc:  # noqa: BLE001

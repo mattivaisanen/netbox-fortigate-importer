@@ -37,5 +37,10 @@ FortiGate's `options`), as is the RIR used for new ASNs.
 | `netbox_fortigate_importer.rollback_importrun` | Rolling back |
 | `netbox_fortigate_importer.add_fortigatebinding` | Linking a configuration to a device, or to a new device (which the apply creates) |
 
-Applying writes NetBox objects as the user who applied the run; with
-netbox-change-approval installed, its approval rules apply to those writes.
+Applying writes NetBox objects as the user who applied the run, with that
+user's NetBox permissions: each object needs the add, change or delete
+permission on its model, and permission constraints (for example "only
+these sites") are checked before and after the write, like a form. An item
+the user may not write fails with a message. Rollback checks the rolling
+back user the same way. With netbox-change-approval installed, its approval
+rules apply to those writes too.

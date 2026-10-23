@@ -13,10 +13,13 @@ from django.views.generic import View
 
 from netbox.object_actions import AddObject, BulkDelete, BulkExport, DeleteObject, EditObject
 from netbox.views import generic
+from utilities.forms import restrict_form_fields
+from utilities.request import safe_for_redirect
 from utilities.views import ConditionalLoginRequiredMixin, register_model_view
 
 from . import filtersets, forms, planner, services, tables
-from .jobs import ImportRunJob, active_job
+from . import jobs
+from .jobs import active_job
 from .mappers import MapperError
 from .models import (
     ActionChoices, DecisionChoices, FortiGateBinding, ImportRun, PlannedChange, RunStatusChoices,
@@ -240,7 +243,7 @@ class _RunActionView(ConditionalLoginRequiredMixin, View):
     permission = None
 
     def get_run(self, request, pk):
-        run = get_object_or_404(ImportRun, pk=pk)
+        run = get_object_or_404(ImportRun.objects.restrict(request.user, 'view'), pk=pk)
         if self.permission and not request.user.has_perm(self.permission):
             raise PermissionDenied
         return run
@@ -254,17 +257,24 @@ class ImportRunBindView(_RunActionView):
 
     def get(self, request, pk):
         run = self.get_run(request, pk)
-        candidates = services.candidate_devices(run.info)
+        candidates = services.candidate_devices(run.info, request.user)
         initial = {'name': run.info.get('hostname')}
         if candidates:
             initial['device'] = candidates[0]
-        return self.render(request, run, forms.BindForm(initial=initial), candidates)
+        return self.render(request, run, self.form(request, initial=initial), candidates)
+
+    @staticmethod
+    def form(request, *args, **kwargs):
+        """The form, offering only devices, sites, ... the user may see."""
+        form = forms.BindForm(*args, **kwargs)
+        restrict_form_fields(form, request.user)
+        return form
 
     def post(self, request, pk):
         run = self.get_run(request, pk)
-        form = forms.BindForm(request.POST)
+        form = self.form(request, request.POST)
         if not form.is_valid():
-            return self.render(request, run, form, services.candidate_devices(run.info))
+            return self.render(request, run, form, services.candidate_devices(run.info, request.user))
         data = form.cleaned_data
         try:
             with transaction.atomic():
@@ -275,7 +285,7 @@ class ImportRunBindView(_RunActionView):
                                              data.get('name'))
         except Exception as exc:  # noqa: BLE001 - shown on the form
             form.add_error(None, str(getattr(exc, 'messages', [exc])[0]))
-            return self.render(request, run, form, services.candidate_devices(run.info))
+            return self.render(request, run, form, services.candidate_devices(run.info, request.user))
         try:
             planner.plan(run)
         except (planner.PlanError, MapperError) as exc:
@@ -315,7 +325,7 @@ class _JobView(_RunActionView):
             messages.error(request, _('Not possible while the run is "{status}".').format(
                 status=run.get_status_display()))
         else:
-            ImportRunJob.enqueue(instance=run, user=request.user, action=self.action)
+            jobs.enqueue(run, request.user, self.action)
             messages.info(request, self.message)
         return redirect(run.get_absolute_url())
 
@@ -350,7 +360,9 @@ class ImportRunDiscardView(_RunActionView):
 
     def post(self, request, pk):
         run = self.get_run(request, pk)
-        if run.status in (RunStatusChoices.PARSED, RunStatusChoices.PLANNED):
+        if jobs.busy(run):
+            messages.error(request, _('This run has a job queued or running.'))
+        elif run.status in (RunStatusChoices.PARSED, RunStatusChoices.PLANNED):
             run.status = RunStatusChoices.DISCARDED
             run.save(update_fields=['status'])
             messages.info(request, _('Run discarded. Nothing was written to NetBox.'))
@@ -364,8 +376,9 @@ class ImportRunDecideView(_RunActionView):
 
     def post(self, request, pk):
         run = self.get_run(request, pk)
-        if run.status != RunStatusChoices.PLANNED:
-            messages.error(request, _('Decisions can only change while the run is ready for review.'))
+        if run.status != RunStatusChoices.PLANNED or jobs.busy(run):
+            messages.error(request, _('Decisions can only change while the run is ready for review '
+                                      'and no job of it is queued or running.'))
             return redirect(run.get_absolute_url())
         decision = request.POST.get('decision')
         labels = {value: label for value, label, *_ in DecisionChoices.CHOICES}
@@ -386,10 +399,22 @@ class ImportRunDecideView(_RunActionView):
             changes = changes.filter(pk__in=request.POST.getlist('pk'))
         if decision == DecisionChoices.KEEP_NETBOX:
             changes = changes.filter(action=ActionChoices.CONFLICT)
-        count = changes.update(decision=decision, decided_by=request.user)
+        with transaction.atomic():
+            # Waits for an apply that holds the run, then sees its job.
+            locked = ImportRun.objects.select_for_update().get(pk=run.pk)
+            if locked.status != RunStatusChoices.PLANNED or jobs.busy(locked):
+                messages.error(request, _('The run changed meanwhile; nothing was decided.'))
+                return redirect(run.get_absolute_url())
+            count = changes.update(decision=decision, decided_by=request.user)
+            if count:
+                # The last dry run was for other decisions.
+                ImportRun.objects.filter(pk=run.pk).update(dry_run={})
         messages.success(request, _('{count} changes set to "{decision}".').format(
             count=count, decision=labels[decision]))
-        return redirect(request.POST.get('return_url') or run.get_absolute_url())
+        return_url = request.POST.get('return_url')
+        if not return_url or not safe_for_redirect(return_url):
+            return_url = run.get_absolute_url()
+        return redirect(return_url)
 
 
 #

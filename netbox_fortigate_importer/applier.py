@@ -23,7 +23,7 @@ import logging
 import uuid
 from contextlib import nullcontext
 
-from django.core.exceptions import ValidationError
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.utils import timezone
 
@@ -72,6 +72,76 @@ def error_text(exc):
     return str(exc) or exc.__class__.__name__
 
 
+def may(user, obj, action):
+    """
+    True if `user` may `action` ("add", "change", "delete") `obj`, with
+    NetBox's object permissions and their constraints, like a form would.
+    For an unsaved object only the model permission is checked; constraints
+    are checked once it is saved.
+    """
+    if user is None:
+        return False
+    model = type(obj)
+    if not user.has_perm(f'{model._meta.app_label}.{action}_{model._meta.model_name}'):
+        return False
+    if obj.pk is None or user.is_superuser:
+        return True
+    queryset = model._default_manager.all()
+    if not hasattr(queryset, 'restrict'):
+        return True  # no object constraints for this model
+    return queryset.restrict(user, action).filter(pk=obj.pk).exists()
+
+
+def require(user, obj, action):
+    if not may(user, obj, action):
+        try:
+            label = f' {obj}' if obj.pk else ''
+        except Exception:  # noqa: BLE001 - only for the message
+            label = ''
+        raise PermissionDenied(f'{getattr(user, "username", "nobody")} may not {action} '
+                               f'{obj._meta.verbose_name}{label}')
+
+
+#: Rows that go with an object and are no work of their own.
+_CASCADE_IGNORED = {('extras', 'taggeditem'), ('extras', 'cachedvalue'), ('extras', 'bookmark'),
+                    ('extras', 'subscription')}
+
+
+def cascade_victims(obj, allowed=frozenset()):
+    """
+    What deleting `obj` would also delete (database cascades and NetBox's
+    generic relations), apart from `allowed` ((content type pk, pk) pairs).
+    Returns labels such as "IP address 10.0.0.1/24", at most 20.
+    """
+    from django.contrib.contenttypes.models import ContentType
+    from django.db.models.deletion import Collector
+
+    collector = Collector(using=obj._state.db or 'default')
+    collector.collect([obj])
+    found = []
+
+    def consider(instance):
+        meta = instance._meta
+        if meta.auto_created or (meta.app_label, meta.model_name) in _CASCADE_IGNORED:
+            return
+        if type(instance) is type(obj) and instance.pk == obj.pk:
+            return
+        if (ContentType.objects.get_for_model(instance).pk, instance.pk) in allowed:
+            return
+        found.append(f'{meta.verbose_name} {instance}')
+
+    for model, instances in collector.data.items():
+        for instance in instances:
+            consider(instance)
+    for queryset in collector.fast_deletes:
+        meta = queryset.model._meta
+        if meta.auto_created or (meta.app_label, meta.model_name) in _CASCADE_IGNORED:
+            continue
+        for instance in queryset[:50]:
+            consider(instance)
+    return found[:20]
+
+
 def fake_request(user, request_id):
     from utilities.request import NetBoxFakeRequest
 
@@ -82,24 +152,47 @@ def fake_request(user, request_id):
 
 
 class Applier:
-    def __init__(self, run: ImportRun, user, dry_run=False):
+    def __init__(self, run: ImportRun, user, dry_run=False, expected_plan=None):
         self.run = run
         self.user = user
         self.dry_run = dry_run
+        #: When the plan the user asked to apply was made (ISO time), if known.
+        self.expected_plan = expected_plan
         self.binding = run.binding
-        self.options = run.options or {}
-        self.rows = list(run.changes.select_related('object_type').order_by('order', 'pk'))
-        #: key -> pk, for resolving references.
-        self.keys = {row.key: row.object_id for row in self.rows if row.object_id}
+        self.load()
         self.results = {}
         self.message = f'FortiGate import: {run}'
         self.tag = None
         self.gate = None
+        #: (content type, pk) of the objects this apply deletes.
+        self.removing = set()
+
+    def load(self):
+        self.options = self.run.options or {}
+        self.rows = list(self.run.changes.select_related('object_type').order_by('order', 'pk'))
+        #: key -> pk, for resolving references.
+        self.keys = {row.key: row.object_id for row in self.rows if row.object_id}
 
     # Checks
 
+    def lock(self):
+        """
+        Inside the transaction: lock the run and its FortiGate, so a re-plan,
+        a decision or another apply or rollback of the same FortiGate waits
+        for this one, then read the run and its plan afresh.
+        """
+        from .models import FortiGateBinding
+
+        if self.run.binding_id is not None:
+            list(FortiGateBinding.objects.select_for_update().filter(pk=self.run.binding_id).values_list('pk'))
+        self.run = ImportRun.objects.select_for_update().get(pk=self.run.pk)
+        self.binding = self.run.binding
+        self.load()
+
     def check(self):
         run = self.run
+        if self.expected_plan and (run.planned is None or run.planned.isoformat() != self.expected_plan):
+            raise ApplyError('The plan was made again after this was requested. Review it and apply again.')
         if run.binding_id is None:
             raise ApplyError('The run is not linked to a FortiGate.')
         if run.status not in RunStatusChoices.APPLICABLE:
@@ -166,10 +259,17 @@ class Applier:
             if now != planned:
                 raise Drift(f'{name} changed in NetBox after the plan was made; plan again')
 
-    def save(self, obj):
+    def save(self, obj, action):
+        """
+        full_clean() and save(), like a form, as the applying user: their
+        NetBox permissions (and constraints, such as "only these sites")
+        apply before and after the write.
+        """
         obj._changelog_message = self.message
+        require(self.user, obj, action)
         obj.full_clean()
         obj.save()
+        require(self.user, obj, action)
 
     def write(self, row, deferred=False):
         model = row.object_type.model_class()
@@ -184,7 +284,7 @@ class Applier:
             obj.snapshot()
             for name in names:
                 write_field(obj, name, self.resolve(proposed['deferred'][name]))
-            self.save(obj)
+            self.save(obj, 'change')
             return
 
         names -= deferred_names
@@ -198,6 +298,7 @@ class Applier:
             if obj is None:
                 raise Drift('the object was deleted in NetBox after the plan was made; plan again')
             self.check_drift(row, obj)
+            require(self.user, obj, 'change')
             obj.snapshot()
         m2m = {}
         for name in names:
@@ -205,10 +306,13 @@ class Applier:
                 m2m[name] = self.resolve(proposed['m2m'][name])
             else:
                 write_field(obj, name, self.resolve(proposed['fields'][name]))
+        action = 'add' if created else 'change'
         if created or names - set(m2m):
-            self.save(obj)
+            self.save(obj, action)
         for name, pks in m2m.items():
             getattr(obj, name).set(pks)
+        if m2m:
+            require(self.user, obj, action)
         if created:
             self.keys[row.key] = obj.pk
             if self.tag is not None and hasattr(obj, 'tags'):
@@ -226,7 +330,9 @@ class Applier:
         binding = FortiGateBinding.objects.get(pk=self.binding.pk)
         binding.snapshot()
         binding.device = device
-        self.save(binding)
+        binding._changelog_message = self.message
+        binding.full_clean()
+        binding.save()
 
     def remove(self, row):
         model = row.object_type.model_class()
@@ -237,8 +343,13 @@ class Applier:
         if row.action == ActionChoices.DEPRECATE:
             obj.snapshot()
             obj.status = 'deprecated'
-            self.save(obj)
+            self.save(obj, 'change')
         else:
+            require(self.user, obj, 'delete')
+            victims = cascade_victims(obj, self.removing)
+            if victims:
+                raise ApplyError('deleting it would also delete ' + ', '.join(victims) +
+                                 '; remove or move those first, or choose "stop managing"')
             obj.snapshot()
             obj._changelog_message = self.message
             obj.delete()
@@ -282,7 +393,7 @@ class Applier:
         if tag is None:
             tag = Tag(name=name, slug=slugify(name), color='e04e39',
                       description='Created by the FortiGate importer')
-            self.save(tag)
+            self.save(tag, 'add')
         return tag
 
     # The loop
@@ -369,6 +480,7 @@ class Applier:
                 self.record(row, OutcomeChoices.SKIPPED, reason)
 
         removals = [r for r in todo if r.action in REMOVALS]
+        self.removing = {(r.object_type_id, r.object_id) for r in removals if r.action == ActionChoices.DELETE}
         removals.sort(key=lambda r: -((r.proposed or {}).get('order') or r.order))
         writes = [r for r in todo if r.action not in REMOVALS]
 
@@ -402,14 +514,15 @@ class Applier:
         """Apply (or dry-run) the plan. Returns the results per key."""
         from utilities.request import apply_request_processors
 
-        self.check()
         request_id = uuid.uuid4()
         request = fake_request(self.user, request_id)
-        continue_on_error = self.options.get('continue_on_error')
         committed = False
         try:
             with apply_request_processors(request):
                 with transaction.atomic():
+                    self.lock()
+                    self.check()
+                    continue_on_error = self.options.get('continue_on_error')
                     if integrations.has_change_approval() and not self.dry_run:
                         from .integrations.change_approval import Gate
 
@@ -462,5 +575,5 @@ class Applier:
         run.save()
 
 
-def apply(run, user, dry_run=False):
-    return Applier(run, user, dry_run=dry_run).execute()
+def apply(run, user, dry_run=False, expected_plan=None):
+    return Applier(run, user, dry_run=dry_run, expected_plan=expected_plan).execute()

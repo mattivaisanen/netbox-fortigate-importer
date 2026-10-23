@@ -48,31 +48,44 @@ def ingest(data: bytes, filename, user, password=None):
 
 
 def find_binding(info):
-    """The FortiGate a configuration belongs to: same serial, else same hostname."""
+    """
+    The FortiGate a configuration belongs to, by serial number only. A
+    hostname is no proof: default names (FortiGate-VM64, FGT60F) repeat, and
+    a wrong match plans deletes on another firewall. Hostname matches are
+    offered on the device choice page instead, for the user to confirm.
+    """
     serial = info.get('serial')
     if serial:
-        binding = FortiGateBinding.objects.filter(serial=serial).first()
-        if binding:
-            return binding
-    hostname = info.get('hostname')
-    if hostname:
-        found = list(FortiGateBinding.objects.filter(Q(hostname__iexact=hostname) | Q(name__iexact=hostname))[:2])
-        if len(found) == 1:
-            return found[0]
+        return FortiGateBinding.objects.filter(serial=serial).first()
     return None
 
 
-def candidate_devices(info, limit=10):
-    """NetBox devices that look like this firewall: serial, then name."""
+def bindings_by_hostname(info):
+    """FortiGates with this configuration's hostname whose serial does not contradict it."""
+    hostname = info.get('hostname')
+    if not hostname:
+        return FortiGateBinding.objects.none()
+    found = FortiGateBinding.objects.filter(Q(hostname__iexact=hostname) | Q(name__iexact=hostname))
+    serial = info.get('serial')
+    if serial:
+        found = found.filter(Q(serial='') | Q(serial=serial))
+    return found
+
+
+def candidate_devices(info, user=None, limit=10):
+    """NetBox devices that look like this firewall (and `user` may see): serial, then name."""
     from dcim.models import Device
 
+    devices = Device.objects.restrict(user, 'view') if user is not None else Device.objects.all()
     found = []
     serial = info.get('serial')
     if serial:
-        found += list(Device.objects.filter(serial__iexact=serial)[:limit])
+        found += list(devices.filter(serial__iexact=serial)[:limit])
+    bound = bindings_by_hostname(info).exclude(device__isnull=True).values_list('device', flat=True)
+    found += list(devices.filter(pk__in=list(bound)).exclude(pk__in=[d.pk for d in found])[:limit])
     hostname = info.get('hostname')
     if hostname:
-        found += list(Device.objects.filter(name__iexact=hostname).exclude(pk__in=[d.pk for d in found])[:limit])
+        found += list(devices.filter(name__iexact=hostname).exclude(pk__in=[d.pk for d in found])[:limit])
     return found[:limit]
 
 

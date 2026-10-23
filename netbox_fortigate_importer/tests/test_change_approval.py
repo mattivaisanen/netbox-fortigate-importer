@@ -20,6 +20,13 @@ class ChangeApprovalTest(ImportTestCase):
 
         Group.objects.get_or_create(name='Change Approvers')
         cls.engineer = get_user_model().objects.create(username='engineer')
+        # May change everything in NetBox, but has no approval bypass.
+        from core.models import ObjectType
+        from users.models import ObjectPermission
+
+        permission = ObjectPermission.objects.create(name='engineer', actions=['view', 'add', 'change', 'delete'])
+        permission.object_types.set(ObjectType.objects.public())
+        permission.users.add(cls.engineer)
 
     def delta_run(self, binding):
         data = data_of(HQ)

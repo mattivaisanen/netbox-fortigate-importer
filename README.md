@@ -15,7 +15,9 @@ deleted objects wait for a person to decide.
 
 1. **Upload** under *FortiGate → New import*: drop the file on the page.
    An encrypted backup asks for its password.
-2. **Match**: the firewall is found by serial number or hostname. The
+2. **Match**: the firewall is found by its serial number. Without a serial
+   match you confirm the device: one with the same hostname is suggested
+   (default hostnames repeat, so a name alone is never trusted). The
    first time, you choose its NetBox device, or ask for a new one. A new
    device is not created yet: it is one of the changes in the plan, written
    on apply and removed again by a rollback.

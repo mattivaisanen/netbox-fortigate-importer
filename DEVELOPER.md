@@ -57,7 +57,15 @@ and with all of them installed.
    next import of the same file doesn't ask again.
 9. **Apply** (`applier.py`): one NetBox request ID, run as the user who
    pressed Apply through `apply_request_processors()` (change log,
-   webhooks, approval plugins), removals first in reverse order, then
+   webhooks, approval plugins), with that user's permissions (`may()` /
+   `require()`: model permission before, constraints before and after each
+   write, like NetBox's views; NetBox itself only checks in views and the
+   API). The run and its FortiGate are locked (`select_for_update`) for
+   the whole apply, so a re-plan, a decision or another apply or rollback
+   of the same FortiGate waits and then refuses; the job carries the plan
+   time the user saw and refuses a plan made again. Plan, decisions and
+   discard refuse while a job of the run is queued or running
+   (`jobs.busy()`). Removals first in reverse order, then
    writes in plan order, then the "deferred" fields (primary IP, virtual
    chassis master) once everything exists. Each item has its own savepoint
    and goes through `full_clean()` + `save()`. Before an object is written
@@ -65,11 +73,15 @@ and with all of them installed.
    again"). By default one failure rolls the whole apply back. Events
    queued by a failed item are taken out of NetBox's event queue so no
    webhook fires for something that was rolled back. A dry run is the
-   same with a rollback at the end.
+   same with a rollback at the end. A delete fails when Django's
+   `Collector` finds that it would also delete something the same apply
+   does not delete (an IP someone added to an imported interface).
 10. **Rollback** (`rollback.py`): the change log entries of the apply's
     request ID, newest first: creates deleted, updates and deletes
     restored from `prechange_data` with `deserialize_object()`. Refused
-    when any of those objects has a later change log entry. The import tag
+    when any of those objects has a later change log entry, or when
+    deleting a created object would cascade to anything the import did not
+    create (`cascade_victims()`). The import tag
     and change-approval's own records are left alone.
 
 ## Ownership rules
@@ -226,6 +238,7 @@ the user, so change-approval decides like for any edit:
 
 `tests/test_parser.py` (no database), `tests/test_apply.py` (plan, apply,
 delta, conflicts, drift, rollback, two firewalls), `tests/test_views.py`
-(upload, password prompt, memory-only upload, review, API, jobs) and
+(upload, password prompt, memory-only upload, review, API, jobs),
+`tests/test_safety.py` (permissions, cascades, locking, matching) and
 `tests/test_change_approval.py`, `tests/test_security.py` and
 `tests/test_routing.py` (skipped unless the plugin is installed).

@@ -10,12 +10,20 @@ from __future__ import annotations
 import hashlib
 
 from django.db.models import Q
+from django.views.decorators.debug import sensitive_variables
 
 from .extract import load
 from .models import FortiGateBinding, ImportRun, RunStatusChoices
 from .parser.files import is_encrypted
 
 
+#: How much larger than the upload limit a compressed file may grow.
+INFLATE_FACTOR = 10
+
+
+# Every local variable from here down (file bytes, text, password) is left
+# out of Django's error pages and error e-mails if something fails.
+@sensitive_variables()
 def ingest(data: bytes, filename, user, password=None):
     """
     Parse an upload and save it as a new run. Raises the parser's errors
@@ -25,7 +33,10 @@ def ingest(data: bytes, filename, user, password=None):
     digest = hashlib.sha256(data).hexdigest()
     size = len(data)
     encrypted = is_encrypted(data)
-    document = load(data, password)
+    from .settings import get_setting
+
+    max_size = int(get_setting('max_upload_mb') or 50) * 1024 * 1024 * INFLATE_FACTOR
+    document = load(data, password, max_size=max_size)
     del data
     run = ImportRun(
         filename=(filename or '')[:255], file_sha256=digest, file_size=size, encrypted=encrypted,

@@ -2,6 +2,7 @@ from django.db import transaction
 from django.shortcuts import get_object_or_404
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.debug import sensitive_variables
 from rest_framework import status
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
@@ -9,6 +10,7 @@ from rest_framework.parsers import MultiPartParser
 from rest_framework.response import Response
 from rest_framework.routers import APIRootView
 
+from netbox.api.authentication import TokenPermissions
 from netbox.api.viewsets import NetBoxModelViewSet, NetBoxReadOnlyModelViewSet
 
 from .. import filtersets, planner, services
@@ -31,6 +33,19 @@ class FortiGateBindingViewSet(NetBoxModelViewSet):
     filterset_class = filtersets.FortiGateBindingFilterSet
 
 
+class RunActionPermissions(TokenPermissions):
+    """
+    POST on an existing run (plan, dry run, apply, rollback) needs only view
+    permission on the run here; each action checks its own permission. Without
+    this, NetBox would treat the POST as "add" and require add_importrun.
+    """
+    perms_map = {**TokenPermissions.perms_map, 'POST': ['%(app_label)s.view_%(model_name)s']}
+
+
+#: Actions on an existing run.
+RUN_ACTIONS = ('plan', 'dry_run', 'apply', 'rollback')
+
+
 class ImportRunViewSet(NetBoxReadOnlyModelViewSet):
     """
     Import runs. POST /upload/ (multipart: file, password, device) reads a
@@ -45,13 +60,24 @@ class ImportRunViewSet(NetBoxReadOnlyModelViewSet):
         if not request.user.has_perm(f'netbox_fortigate_importer.{perm}'):
             raise PermissionDenied()
 
+    def initial(self, request, *args, **kwargs):
+        # Uploads stay in memory. This must happen before authentication:
+        # session authentication checks the CSRF token, which reads the body.
+        if self.action == 'upload':
+            from ..views import InMemoryUploadHandler
+
+            request._request.upload_handlers = [InMemoryUploadHandler(request._request)]
+        super().initial(request, *args, **kwargs)
+        if self.action in RUN_ACTIONS and request.user.is_authenticated:
+            self.queryset = type(self).queryset.restrict(request.user, 'view')
+
     @method_decorator(csrf_exempt)
     @action(detail=False, methods=['post'], parser_classes=[MultiPartParser])
+    @method_decorator(sensitive_variables())
     def upload(self, request):
-        from ..views import InMemoryUploadHandler
-
+        # Keep the password out of Django's error reports.
+        request._request.sensitive_post_parameters = ('password',)
         self._require(request, 'add_importrun')
-        request._request.upload_handlers = [InMemoryUploadHandler(request._request)]
         form = serializers.UploadSerializer(data=request.data)
         form.is_valid(raise_exception=True)
         upload = form.validated_data['file']
@@ -84,7 +110,7 @@ class ImportRunViewSet(NetBoxReadOnlyModelViewSet):
         except (planner.PlanError, MapperError) as exc:
             raise ValidationError({'detail': str(exc)})
 
-    @action(detail=True, methods=['post'])
+    @action(detail=True, methods=['post'], permission_classes=[RunActionPermissions])
     def plan(self, request, pk):
         self._require(request, 'change_importrun')
         run = self.get_object()
@@ -102,15 +128,15 @@ class ImportRunViewSet(NetBoxReadOnlyModelViewSet):
         job = ImportRunJob.enqueue(instance=run, user=request.user, action=name)
         return Response({'job': job.pk, 'job_url': job.get_absolute_url()}, status=status.HTTP_202_ACCEPTED)
 
-    @action(detail=True, methods=['post'], url_path='dry-run')
+    @action(detail=True, methods=['post'], url_path='dry-run', permission_classes=[RunActionPermissions])
     def dry_run(self, request, pk):
         return self._job(request, 'dry-run', 'apply_importrun', lambda run: run.can_apply)
 
-    @action(detail=True, methods=['post'])
+    @action(detail=True, methods=['post'], permission_classes=[RunActionPermissions])
     def apply(self, request, pk):
         return self._job(request, 'apply', 'apply_importrun', lambda run: run.can_apply)
 
-    @action(detail=True, methods=['post'])
+    @action(detail=True, methods=['post'], permission_classes=[RunActionPermissions])
     def rollback(self, request, pk):
         return self._job(request, 'rollback', 'rollback_importrun', lambda run: run.can_rollback)
 

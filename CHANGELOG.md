@@ -38,3 +38,18 @@ New:
   areas, interfaces).
 - With netbox-change-approval, imports by users without bypass go through
   approval as one change set, and the import follows the decisions.
+
+Fixed:
+
+- Scripts stored in a configuration (`system auto-script`, automation
+  actions) are kept as text. Before, their lines were read as configuration,
+  so a script that adds an address made the import propose that address.
+- A small compressed file that unpacks to a huge one is refused (limit:
+  ten times `max_upload_mb`) instead of filling the server's memory.
+- If reading a configuration fails unexpectedly, Django's error page and
+  error e-mails no longer show the file's text or the backup password.
+- Kerberos keytabs, RIP authentication strings, access keys and tokens are
+  dropped as secrets like passwords.
+- Uploads through the REST API with a browser session stay in memory too.
+- REST API plan, dry run, apply and rollback work for users who may apply or
+  roll back but not upload.

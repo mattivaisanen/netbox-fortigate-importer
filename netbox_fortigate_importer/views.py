@@ -8,6 +8,7 @@ from django.urls import NoReverseMatch, reverse
 from django.utils.decorators import method_decorator
 from django.utils.translation import gettext as _
 from django.views.decorators.csrf import csrf_exempt, csrf_protect
+from django.views.decorators.debug import sensitive_post_parameters, sensitive_variables
 from django.views.generic import View
 
 from netbox.object_actions import AddObject, BulkDelete, BulkExport, DeleteObject, EditObject
@@ -122,12 +123,14 @@ class ImportRunUploadView(ConditionalLoginRequiredMixin, View):
             'form': forms.UploadForm(), 'max_upload_mb': get_setting('max_upload_mb'),
         })
 
+    @method_decorator(sensitive_post_parameters('password'))
     def post(self, request):
         # Replace the upload handlers before anything reads the body (CSRF
         # included, hence csrf_exempt here and csrf_protect inside).
         request.upload_handlers = [InMemoryUploadHandler(request)]
         return csrf_protect(self._post)(request)
 
+    @method_decorator(sensitive_variables())
     def _post(self, request):
         if not request.user.has_perm('netbox_fortigate_importer.add_importrun'):
             raise PermissionDenied

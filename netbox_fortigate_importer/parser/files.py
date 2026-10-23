@@ -17,11 +17,13 @@ configuration text. FortiOS 7.4.4 changed the key derivation (the fix for
 CVE-2024-21754); with no sample of the new format, such files fail with a
 clear message instead of a guess.
 """
-import gzip
 import hashlib
 import zlib
 
 ENCRYPTED_MAGIC = b'#FGBK|'
+#: Largest decompressed configuration read by default. A real backup is a
+#: few megabytes; a small "zip bomb" must not fill the web worker's memory.
+MAX_TEXT_BYTES = 500 * 1024 * 1024
 GZIP_MAGIC = b'\x1f\x8b'
 
 #: (major, minor, patch) from which encrypted backups use the new format.
@@ -75,7 +77,7 @@ def encrypted_header(data):
     return info
 
 
-def decrypt_backup(data, password):
+def decrypt_backup(data, password, max_size=MAX_TEXT_BYTES):
     """Decrypt an encrypted backup. Returns the decompressed bytes."""
     try:
         from cryptography.exceptions import InvalidTag
@@ -103,16 +105,34 @@ def decrypt_backup(data, password):
                 'whose encryption is not supported yet.'
             )
         raise DecryptionError(f'Wrong password, or the file is damaged.{hint}') from None
-    return _maybe_decompress(plain)
+    return _maybe_decompress(plain, max_size)
 
 
-def _maybe_decompress(data):
-    if data.startswith(GZIP_MAGIC):
-        try:
-            return gzip.decompress(data)
-        except (OSError, EOFError, zlib.error) as exc:
-            raise UnsupportedFormat(f'The compressed configuration is damaged: {exc}') from exc
-    return data
+def _maybe_decompress(data, max_size=MAX_TEXT_BYTES):
+    if not data.startswith(GZIP_MAGIC):
+        return data
+    # Stream it, so a tiny file that inflates to gigabytes stops at max_size.
+    out = bytearray()
+    try:
+        while data:
+            inflater = zlib.decompressobj(wbits=31)  # gzip; one per gzip member
+            while data:
+                out += inflater.decompress(data, max_size + 1 - len(out))
+                if len(out) > max_size:
+                    raise UnsupportedFormat(
+                        f'The configuration is larger than {max_size // (1024 * 1024)} MB once '
+                        'uncompressed; it is not read.')
+                data = inflater.unconsumed_tail
+                if inflater.eof:
+                    break
+            if not inflater.eof:
+                raise EOFError('the compressed data ends early')
+            data = inflater.unused_data
+            if data and not data.startswith(GZIP_MAGIC):
+                break  # trailing padding after the last member
+    except (OSError, EOFError, zlib.error) as exc:
+        raise UnsupportedFormat(f'The compressed configuration is damaged: {exc}') from exc
+    return bytes(out)
 
 
 def _decode(data):
@@ -124,7 +144,7 @@ def _decode(data):
     raise UnsupportedFormat('The file is not text.')  # pragma: no cover - latin-1 never fails
 
 
-def read_config_bytes(data, password=None):
+def read_config_bytes(data, password=None, max_size=MAX_TEXT_BYTES):
     """
     Turn uploaded bytes into configuration text.
 
@@ -137,9 +157,9 @@ def read_config_bytes(data, password=None):
     if is_encrypted(data):
         if not password:
             raise PasswordRequired(encrypted_header(data))
-        data = decrypt_backup(data, password)
+        data = decrypt_backup(data, password, max_size)
     else:
-        data = _maybe_decompress(data)
+        data = _maybe_decompress(data, max_size)
     sample = data[:4096]
     if b'\x00' in sample:
         raise UnsupportedFormat('The file is binary, not a FortiGate configuration.')

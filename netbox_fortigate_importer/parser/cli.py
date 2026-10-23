@@ -117,10 +117,13 @@ def tokenize_line(text, pos=0):
     outside quotes; outside quotes, a backslash before a newline continues
     the line. Quoted parts may contain newlines (certificates, messages).
 
-    A quote left open on a line whose next line is a CLI command (`set`,
-    `next`, `end`, ...) is a typo, not a multi-line value: it is closed at the
-    end of its line, so one stray quote can't swallow the rest of the file.
-    Returns (tokens, new_pos, repaired) where `repaired` says that happened.
+    A quote left open at the end of a line starts a multi-line value when the
+    value is closed properly later: by a quote that ends its line. Scripts
+    (`system auto-script`, `automation-action`) are such values, and their
+    lines look like CLI commands, so they must stay text. A quote that is
+    never closed that way is a typo: it is closed at the end of its line, so
+    one stray quote can't swallow the rest of the file. Returns
+    (tokens, new_pos, repaired) where `repaired` says that happened.
     """
     tokens = []
     length = len(text)
@@ -160,7 +163,8 @@ def tokenize_line(text, pos=0):
                 if char == quote:
                     pos += 1
                     break
-                if char == '\n' and not multiline and _COMMAND_LINE.match(text, pos + 1):
+                if char == '\n' and not multiline and _COMMAND_LINE.match(text, pos + 1) \
+                        and not _closes_at_line_end(text, pos + 1, quote):
                     repaired = True
                     break  # stray quote: close it here; the newline ends the command
                 if char == '\n':
@@ -173,6 +177,27 @@ def tokenize_line(text, pos=0):
     if current is not None:
         tokens.append(''.join(current))
     return tokens, pos, repaired
+
+
+def _closes_at_line_end(text, pos, quote):
+    """
+    True if the next unescaped `quote` from `pos` is followed only by
+    whitespace up to the end of its line: the closing quote of a multi-line
+    value. A stray quote finds the opening quote of a later value instead
+    (`edit "name"`, `set alias "x"`), which is followed by more text.
+    """
+    length = len(text)
+    while pos < length:
+        char = text[pos]
+        if char == '\\':
+            pos += 2
+            continue
+        if char == quote:
+            end = text.find('\n', pos + 1)
+            rest = text[pos + 1:] if end == -1 else text[pos + 1:end]
+            return not rest.strip()
+        pos += 1
+    return False
 
 
 def _clean(text):

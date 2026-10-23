@@ -12,7 +12,7 @@ PLUGINS_CONFIG = {
 
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
-| `max_upload_mb` | int | `50` | Largest configuration file accepted, in megabytes. Files are held in memory only. |
+| `max_upload_mb` | int | `50` | Largest configuration file accepted, in megabytes. Files are held in memory only. A compressed file may unpack to at most ten times this. |
 | `auto_approve_creates` | bool | `True` | New objects start approved in the review. Changes and deletes always wait for a person. |
 | `vrf_per_vdom` | bool | `True` | In multi-VDOM configurations, put each VDOM in its own VRF, named `<FortiGate> <vdom>`. VDOMs often reuse the same subnets, which NetBox's global uniqueness check refuses without VRFs. FortiOS VRF numbers inside a VDOM always get their own VRF. |
 | `create_connected_prefixes` | bool | `True` | Create prefixes for the networks on the firewall's interfaces. |

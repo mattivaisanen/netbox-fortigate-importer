@@ -6,13 +6,20 @@ How the importer works and why, for anyone changing it.
 
 1. **Bytes to text** (`parser/files.py`): plain, gzip or encrypted
    (`#FGBK|` header, AES-256-GCM, key = SHA-256 of the password, gzip
-   inside). In memory only.
+   inside). In memory only. Decompression streams and stops at
+   `max_size` (ten times `max_upload_mb`), so a small "zip bomb" can't
+   exhaust memory. `services.ingest` is `@sensitive_variables()` and the
+   upload views mark `password` sensitive, so Django's error reports never
+   show the file, its text or the password.
 2. **Text to tree** (`parser/cli.py`): a shell-like tokenizer (quoted and
    bare parts join, backslash escapes, multi-line quoted values) and a
    stack machine for `config` / `edit` / `set` / `next` / `end`, plus the
    script commands `rename`, `move`, `clone`, `delete`, `purge`, `append`,
-   `select`, `unselect`. A stray quote is closed at the end of its line when
-   the next line is a CLI command, so one typo can't swallow the file.
+   `select`, `unselect`. A quote left open at a line end starts a multi-line
+   value only if a later quote closes it at the end of its line (scripts,
+   certificates); otherwise it is a typo and is closed at the end of its own
+   line, so one stray quote can't swallow the file and script lines are
+   never read as configuration.
 3. **Secrets out** (`parser/secrets.py`): checked for every `set` while
    parsing; flagged values never enter the tree. Only a count is kept.
 4. **Layout** (`parser/layout.py`): header facts (model, firmware, VDOM

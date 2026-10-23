@@ -61,6 +61,8 @@ class Gate:
         self._stack = []
         if exc_info[0] is not None:
             return False
+        if self.applier.dry_run:
+            return False  # rolled back with the rest; nothing to submit
         if self.change_set.requests().exists():
             changesets.submit(self.change_set)
             self.applier.run.change_set_id = self.change_set.pk

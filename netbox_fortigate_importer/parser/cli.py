@@ -99,6 +99,8 @@ class ParseResult:
     secrets_removed: int = 0
     #: Command lines seen (for the summary).
     lines: int = 0
+    #: The file ends inside a block: it is probably cut off.
+    truncated: bool = False
 
 
 MAX_WARNINGS = 200
@@ -342,7 +344,7 @@ def parse(text):
 
     return ParseResult(
         root=root, header=header, warnings=warnings,
-        secrets_removed=secrets_removed, lines=next_line - 1,
+        secrets_removed=secrets_removed, lines=next_line - 1, truncated=len(stack) > 1,
     )
 
 

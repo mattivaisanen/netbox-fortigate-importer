@@ -134,13 +134,28 @@ class ConcurrencyTest(ImportTestCase):
 
 
 class MatchTest(ImportTestCase):
-    def test_hostname_alone_does_not_pick_the_firewall(self):
+    def test_unique_own_hostname_still_matches(self):
+        binding = self.make_binding('HQ-FW01')
+        binding.hostname = 'HQ-FW01'
+        binding.save()
+        self.assertEqual(services.find_binding({'hostname': 'hq-fw01'}), binding)
+        binding.serial = 'FG100F001'
+        binding.save()
+        self.assertEqual(services.find_binding({'hostname': 'HQ-FW01'}), binding)
+        # A different serial is a different firewall, whatever its name.
+        self.assertIsNone(services.find_binding({'hostname': 'HQ-FW01', 'serial': 'FG100F999'}))
+
+    def test_hostname_matches_only_when_unique(self):
         binding = self.make_binding('FortiGate-VM64')
         binding.serial, binding.hostname = 'FGVM01', 'FortiGate-VM64'
         binding.save()
         self.assertEqual(services.find_binding({'serial': 'FGVM01', 'hostname': 'x'}), binding)
         self.assertIsNone(services.find_binding({'serial': 'FGVM02', 'hostname': 'FortiGate-VM64'}))
-        self.assertIsNone(services.find_binding({'hostname': 'FortiGate-VM64'}))
+        self.assertEqual(services.find_binding({'hostname': 'FortiGate-VM64'}), binding)
+        twin = self.make_binding('FortiGate-VM64 B')
+        twin.hostname = 'FortiGate-VM64'
+        twin.save()
+        self.assertIsNone(services.find_binding({'hostname': 'FortiGate-VM64'}), 'two have it: the user chooses')
         # Offered for confirmation only when the serial does not contradict it.
         self.assertIn(binding.device, services.candidate_devices({'hostname': 'FortiGate-VM64'}))
         other = Device.objects.create(name='other', site=self.site, device_type=self.device_type, role=self.role)
@@ -181,9 +196,14 @@ class AdoptionTest(ImportTestCase):
         data['connected'] = [n for n in data['connected'] if n['vdom'] != 'CUST-A']
         self.apply(self.plan(first, data))
         run = self.plan(second, data)
-        row = run.changes.get(key='ip/mgmt/192.168.255.10')
-        self.assertEqual(row.action, 'create')
-        self.assertIn('another device', row.note)
+        # Neither taken over nor duplicated (NetBox refuses duplicates
+        # outside VRFs): left out, with a note.
+        self.assertFalse(run.changes.filter(key='ip/mgmt/192.168.255.10').exists())
+        self.assertTrue(any('192.168.255.10' in n and 'fw-a' in n for n in run.summary['notes']),
+                        run.summary['notes'])
+        self.apply(run)
+        self.assertEqual(run.status, RunStatusChoices.APPLIED, run.error)
+        self.assertEqual(IPAddress.objects.get(address='192.168.255.10/24').assigned_object.device.name, 'fw-a')
 
 
 class ReviewTest(ImportTestCase):
@@ -244,3 +264,26 @@ class RecordTest(ImportTestCase):
         ObjectChange.objects.filter(request_id=run.apply_request_id).delete()
         with self.assertRaisesMessage(rollback.RollbackError, 'change log no longer has'):
             rollback.rollback(run, self.user)
+
+
+class AdoptedRemovalTest(ImportTestCase):
+    def test_adopted_object_is_kept_when_the_firewall_drops_it(self):
+        binding = self.make_binding()
+        Interface.objects.create(device=binding.device, name='port15', type='1000base-t')
+        self.first_import(binding)
+        self.assertTrue(binding.managed_objects.get(key='interface/port15').fields['@meta']['adopted'])
+        data = data_of(HQ)
+        data['interfaces'] = [i for i in data['interfaces'] if i['name'] != 'port15']
+        row = self.plan(binding, data).changes.get(key='interface/port15')
+        self.assertEqual(row.action, 'unmanage')
+        self.assertIn('existed in NetBox before', row.note)
+
+
+class TruncationFlagTest(ImportTestCase):
+    def test_flag_survives_many_warnings(self):
+        from netbox_fortigate_importer.extract import load as load_bytes
+
+        text = 'config system global\nset hostname X\nend\n' + 'bogus\n' * 300 + 'config firewall address\nedit a\n'
+        data = load_bytes(text.encode())
+        self.assertTrue(data['truncated'])
+        self.assertFalse(any('may be truncated' in w for w in data['warnings']))

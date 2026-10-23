@@ -93,6 +93,7 @@ def extract(result: ParseResult):
             'not_imported': _unused_tables(result, config_layout),
         },
         'warnings': warnings,
+        'truncated': result.truncated,
     }
 
 

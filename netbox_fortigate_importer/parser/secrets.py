@@ -38,6 +38,14 @@ SECRET_TABLES = (
     'system snmp community', 'system snmp user',
 )
 
+#: Keys that are secrets in one table: automation webhooks carry tokens in
+#: their URL, body and headers, and scripts can hold anything.
+SECRET_KEYS_IN = {
+    'system automation-action': frozenset({'uri', 'http-body', 'headers', 'script'}),
+    'system auto-script': frozenset({'script'}),
+    'http-headers': frozenset({'key', 'value'}),  # automation-action's own header table
+}
+
 #: Keys of SNMP community entries that may stay (they name things, not secrets).
 _SNMP_SAFE = frozenset({'status', 'events', 'query-v1-status', 'query-v2c-status',
                         'trap-v1-status', 'trap-v2c-status'})
@@ -49,6 +57,8 @@ def is_secret(key, values, table_path=''):
     if values and values[0] == 'ENC':
         return True
     if lowered in SECRET_KEYS or _SECRET_FRAGMENTS.search(lowered):
+        return True
+    if lowered in SECRET_KEYS_IN.get(table_path, ()):
         return True
     for value in values:
         if 'PRIVATE KEY' in value or 'BEGIN CERTIFICATE' in value or 'BEGIN ENCRYPTED' in value:

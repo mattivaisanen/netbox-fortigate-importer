@@ -132,14 +132,36 @@ class NativeMapper:
         ha = self.ctx.data.get('ha')
         if not ha or ha.get('mode') in (None, 'standalone'):
             return
-        name = ha.get('group_name') or f'{self.ctx.name} HA'
+        name = self.ha_name()
+        chassis = self.m['vc'].objects.filter(name=name).first()
+        deferred = {}
+        if chassis is None or chassis.master_id is None or chassis.master_id == getattr(self.ctx.device, 'pk', None):
+            # The first unit imported becomes the master; the other unit's
+            # import leaves it alone.
+            deferred['master'] = self.ctx.device
         self.add(Desired(
             key='ha/virtual-chassis', model=self.m['vc'], section='device', label=f'HA cluster {name}',
             fields={'name': name, 'domain': f'ha-group-{ha.get("group_id") or 0}'},
-            lookup={'name': name},
-            deferred={'master': self.ctx.device},
-            note='FortiGate HA cluster',
+            lookup={'name': name}, deferred=deferred,
+            note='FortiGate HA cluster', shared=True,  # both units of the pair import it
         ))
+
+    def ha_name(self):
+        return self.ctx.data['ha'].get('group_name') or f'{self.ctx.name} HA'
+
+    def vc_position(self):
+        """This unit's position in its HA cluster: kept if set, else the first free one."""
+        device = self.ctx.device if self.ctx.device_exists else None
+        chassis = self.m['vc'].objects.filter(name=self.ha_name()).first()
+        if chassis is None:
+            return 1
+        if device is not None and device.virtual_chassis_id == chassis.pk and device.vc_position:
+            return device.vc_position
+        members = self.m['device'].objects.filter(virtual_chassis=chassis)
+        if device is not None:
+            members = members.exclude(pk=device.pk)
+        taken = set(members.values_list('vc_position', flat=True))
+        return next(position for position in range(1, len(taken) + 2) if position not in taken)
 
     def device(self):
         ctx = self.ctx
@@ -152,7 +174,7 @@ class NativeMapper:
         ha = ctx.data.get('ha')
         if ha and ha.get('mode') not in (None, 'standalone'):
             fields['virtual_chassis'] = Ref('ha/virtual-chassis')
-            fields['vc_position'] = 1
+            fields['vc_position'] = self.vc_position()
             fields['vc_priority'] = ha.get('priority')
         deferred = {}
         primary = self.primary_ip_key()

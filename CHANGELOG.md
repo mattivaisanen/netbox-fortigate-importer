@@ -2,6 +2,40 @@
 
 ## Unreleased
 
+## 0.7.0 (2026-10-24)
+
+Fixed:
+
+- A backup of single VDOMs (made by a VDOM administrator, without the
+  global part) is refused with an explanation. Before, it was read as an
+  empty configuration, and the plan proposed deleting the root VDOM, the
+  interfaces and everything else firewall-wide.
+- An IP address that moves to another interface on the firewall is moved
+  in NetBox. Before, the plan both deleted and adopted it, and the apply
+  failed.
+- The second unit of an HA pair joins the first unit's virtual chassis at
+  the next free position, and the first unit stays its master. Before, the
+  second unit's device was not updated at all.
+- Deleting or rolling back an imported object is refused when it would
+  clear a reference on someone else's object, such as a switch port's
+  untagged VLAN or another device's primary IP. Before, NetBox cleared it
+  silently.
+- A device whose primary IP was skipped (or failed with "keep going past
+  failed items") shows as applied, with what was not written, instead of
+  "skipped" or "failed".
+- With netbox-change-approval: rejecting only a device's primary IP or a
+  chassis master keeps the device managed by the importer. A failed apply
+  no longer shows changes as "waiting for approval".
+- Scripts and automation webhooks' URLs, bodies and headers (which carry
+  tokens) are dropped like passwords.
+- Choosing a device whose FortiGate has another serial number warns.
+  An import already linked to a FortiGate can no longer be moved to
+  another one.
+- "A new device" with a name NetBox already has (at that site) is linked
+  to the FortiGate when the import is applied.
+- The job log of a dry run shows the counts of that dry run, not the
+  previous one.
+
 ## 0.6.0 (2026-10-23)
 
 New:

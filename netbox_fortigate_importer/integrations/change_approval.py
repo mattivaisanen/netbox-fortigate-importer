@@ -143,9 +143,19 @@ def request_saved(sender, instance, created=False, **kwargs):
                 managed.save(update_fields=['confirmed', 'updated'])
         else:
             change.outcome = OutcomeChoices.REJECTED
-            restore_managed(change, managed)
+            if not deferred_only(change, managed):
+                restore_managed(change, managed)
         change.save(update_fields=['outcome'])
         settle_run(change.run)
+
+
+def deferred_only(change, managed):
+    """
+    True when only the fields written last (primary IP, chassis master)
+    waited for approval: the object itself was written by the import, and
+    its record already leaves those fields out.
+    """
+    return managed is not None and managed.confirmed and managed.last_run_id == change.run_id
 
 
 def restore_managed(change, managed):

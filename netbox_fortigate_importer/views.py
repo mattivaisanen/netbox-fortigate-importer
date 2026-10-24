@@ -264,6 +264,8 @@ class ImportRunBindView(_RunActionView):
 
     def get(self, request, pk):
         run = self.get_run(request, pk)
+        if run.binding_id is not None:
+            return self.already_linked(request, run)
         candidates = services.candidate_devices(run.info, request.user)
         initial = {'name': run.info.get('hostname')}
         if candidates:
@@ -277,8 +279,17 @@ class ImportRunBindView(_RunActionView):
         restrict_form_fields(form, request.user)
         return form
 
+    @staticmethod
+    def already_linked(request, run):
+        # Moving a planned or applied run to another FortiGate would leave
+        # its plan, records and rollback pointing at the wrong one.
+        messages.error(request, _('This import is already linked to a FortiGate.'))
+        return redirect(run.get_absolute_url())
+
     def post(self, request, pk):
         run = self.get_run(request, pk)
+        if run.binding_id is not None:
+            return self.already_linked(request, run)
         form = self.form(request, request.POST)
         if not form.is_valid():
             return self.render(request, run, form, services.candidate_devices(run.info, request.user))
@@ -286,7 +297,12 @@ class ImportRunBindView(_RunActionView):
         try:
             with transaction.atomic():
                 if data['mode'] == form.MODE_EXISTING:
-                    services.bind(run, data['device'])
+                    binding = services.bind(run, data['device'])
+                    if binding.replaced_serial:
+                        messages.warning(request, _(
+                            'This device was FortiGate {old}; this configuration is from {new}. If that is not '
+                            'a replaced unit, discard this import and choose another device.'
+                        ).format(old=binding.replaced_serial, new=binding.serial))
                 else:
                     services.bind_new_device(run, data['site'], data['role'], data.get('device_type'),
                                              data.get('name'))

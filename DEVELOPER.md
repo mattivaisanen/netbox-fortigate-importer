@@ -28,8 +28,13 @@ How the importer works and why, for anyone changing it.
    never read as configuration.
 3. **Secrets out** (`parser/secrets.py`): checked for every `set` while
    parsing; flagged values never enter the tree. Only a count is kept.
+   Some keys are secrets only in one table (`SECRET_KEYS_IN`): scripts,
+   and automation webhooks' URL, body and headers.
 4. **Layout** (`parser/layout.py`): header facts (model, firmware, VDOM
    mode, serial from the default `alias`) and the global / per-VDOM split.
+   A backup of VDOMs without `config global` (a VDOM administrator's) is
+   refused: without its interfaces everything firewall-wide would look
+   deleted.
 5. **Extract** (`extract/`): the importer's own JSON document, the only
    thing saved (`ImportRun.data`).
 
@@ -87,7 +92,9 @@ and with all of them installed.
     restored from `prechange_data` with `deserialize_object()`. Refused
     when any of those objects has a later change log entry, or when
     deleting a created object would cascade to anything the import did not
-    create (`cascade_victims()`), or when the change log no longer has the
+    create, or would clear a reference on someone else's object such as a
+    switch port's untagged VLAN (`cascade_victims()`, which also reads the
+    collector's SET_NULL updates), or when the change log no longer has the
     entries of the objects the apply created (retention). Changes approved
     later by their approver are not undone, so their records stay. The import tag
     and change-approval's own records are left alone.
@@ -117,6 +124,14 @@ and with all of them installed.
 - **Nothing removed from an incomplete file:** when the parser reports a
   truncated file (`ParseResult.truncated`, saved as `data['truncated']`), or a VDOM of a managed object is missing, the plan holds
   those removals back with a note.
+- **Moved objects keep their record:** when a wanted key finds an object
+  that a key the configuration no longer has managed (an IP address moved
+  to another interface), the plan updates it under the new key and only
+  drops the old record (`Planner.rekeyed`, `plan_rekey()`), instead of
+  deleting and adopting the same object.
+- **Fields written last that fail** (primary IP, chassis master) leave the
+  object "applied", with what was not written in its error; with
+  change-approval, rejecting only those fields keeps the object managed.
 - **Decisions survive re-planning** for rows whose action, values and diff
   are unchanged (`carry_decisions()`).
 - **Text is text:** configuration strings that look like reference tokens
@@ -129,7 +144,7 @@ and with all of them installed.
 | --- | --- |
 | The firewall | its Device: platform FortiOS, serial, `local_context_data.fortigate`, primary IPv4 (management interface) |
 | A firewall NetBox does not have | a new Device (name, site, role from the device choice; a Fortinet DeviceType named after the model unless one was chosen) |
-| HA cluster | VirtualChassis named after the HA group, this device as master |
+| HA cluster | VirtualChassis named after the HA group (shared by both units), the first unit imported as master, each unit at the first free position |
 | VDOM | VirtualDeviceContext; with `vrf_per_vdom`, a VRF per VDOM |
 | FortiOS VRF number | VRF `<name> <vdom> vrf<n>` |
 | interface | Interface (physical, `lag`, `bridge` for hard/soft switches, `virtual` for VLAN, tunnel, loopback, VDOM link) with parent, LAG, bridge, VDCs, VRF, MTU, speed |

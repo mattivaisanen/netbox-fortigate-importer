@@ -70,9 +70,22 @@ class TokenizerTests(SimpleTestCase):
         self.assertEqual(result.warnings, [])
         self.assertEqual(list(result.root.tables['firewall address'].entries), ['real'])
         self.assertNotIn('system global', result.root.tables)
+        # The scripts themselves are dropped like secrets: they can hold anything.
         action = result.root.tables['system automation-action'].entries['add-addr']
-        self.assertTrue(action.get('script').startswith('config firewall address\nedit injected'))
-        self.assertIn('set hostname "evil"', result.root.tables['system auto-script'].entries['backup'].get('script'))
+        self.assertEqual(action.get('action-type'), 'cli-script')
+        self.assertIsNone(action.get('script'))
+        self.assertIsNone(result.root.tables['system auto-script'].entries['backup'].get('script'))
+
+    def test_webhook_tokens_are_dropped(self):
+        result = parse('config system automation-action\nedit "slack"\nset action-type webhook\n'
+                       'set uri "hooks.slack.com/services/T000/B000/XXXX"\nset http-body "{\\"token\\": 1}"\n'
+                       'config http-headers\nedit 1\nset key "Authorization"\nset value "Bearer abc"\nnext\nend\n'
+                       'next\nend\n')
+        action = result.root.tables['system automation-action'].entries['slack']
+        self.assertEqual(action.get('action-type'), 'webhook')
+        self.assertEqual(set(action.values), {'action-type'})
+        self.assertEqual(action.tables['http-headers'].entries['1'].values, {})
+        self.assertEqual(result.secrets_removed, 4)
 
     def test_batfish_replacemsg_escapes(self):
         """Batfish's own expectation for its odd-quoting fixture."""
@@ -267,6 +280,14 @@ class LayoutTests(SimpleTestCase):
         self.assertTrue(config.info.is_vm)
         self.assertTrue(config.info.multi_vdom)
         self.assertEqual(list(config.vdoms), ['root', 'ro'])
+
+    def test_vdom_only_backup_is_refused(self):
+        # A VDOM administrator's backup: VDOMs, but no global part.
+        text = ('#config-version=FGT60F-7.4.3-FW-build2573-240201:opmode=0:vdom=1:user=dmzadmin\n'
+                'config vdom\nedit dmz\nconfig firewall address\nedit "web"\nset subnet 10.0.0.5 255.255.255.255\n'
+                'next\nend\nnext\nend\n')
+        with self.assertRaisesMessage(ParseError, 'only VDOM settings (dmz)'):
+            layout(parse(text))
 
 
 class ExtractTests(SimpleTestCase):

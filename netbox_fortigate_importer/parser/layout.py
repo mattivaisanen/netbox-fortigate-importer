@@ -17,7 +17,7 @@ The parser merges the two `config vdom` blocks, so here `global` is the
 import re
 from dataclasses import dataclass, field
 
-from .cli import ParseResult, Section
+from .cli import ParseError, ParseResult, Section
 
 # "FG100D-5.04-FW-build1064-160608", "FGVM64-7.4.0-FW-build2360-230509",
 # "FGT60F-7.2.8-FW-build1639-240313"
@@ -133,6 +133,14 @@ def layout(result: ParseResult):
     root = result.root
     vdom_table = root.tables.get('vdom')
     global_table = root.tables.get('global')
+    if vdom_table is not None and global_table is None and vdom_table.entries:
+        # A backup of single VDOMs (a VDOM administrator's, or one with VDOM
+        # scope). Without the global part (interfaces, HA, hostname) every
+        # firewall-wide object would look deleted.
+        raise ParseError(
+            'This backup has only VDOM settings ({}), not the global part with the interfaces and '
+            'hostname. Back up the full configuration (as a global administrator) and upload that '
+            'instead.'.format(', '.join(vdom_table.entries)))
     if vdom_table is not None and global_table is not None:
         info.multi_vdom = True
         global_section = global_table

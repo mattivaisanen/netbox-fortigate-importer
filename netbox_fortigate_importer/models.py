@@ -210,6 +210,9 @@ class ImportRun(JobsMixin, BaseModel):
     filename = models.CharField(verbose_name=_('file name'), max_length=255, blank=True)
     file_sha256 = models.CharField(verbose_name=_('SHA-256 of the file'), max_length=64, blank=True)
     file_size = models.PositiveBigIntegerField(verbose_name=_('file size'), default=0)
+    #: SHA-256 of the extracted data: the same for the same configuration,
+    #: plain or encrypted (compare.content_hash).
+    data_sha256 = models.CharField(verbose_name=_('SHA-256 of the configuration'), max_length=64, blank=True)
     encrypted = models.BooleanField(verbose_name=_('encrypted'), default=False)
     #: Header facts (model, firmware, hostname, serial, VDOM mode).
     info = models.JSONField(verbose_name=_('configuration info'), default=dict, blank=True)

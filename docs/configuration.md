@@ -20,6 +20,7 @@ PLUGINS_CONFIG = {
 | `import_tag` | str | `"fortigate-import"` | Tag added to every object the importer creates. |
 | `default_delete_action` | str | `"delete"` | What a firewall object that disappeared proposes for its NetBox object: `delete`, `unmanage` (keep it, stop syncing) or `deprecate` (status "deprecated" where the model has one, otherwise delete). Deletes always wait for review. |
 | `continue_on_error` | bool | `False` | When applying, keep going past items that fail (each in its own savepoint) instead of rolling the whole run back. |
+| `journal_entries` | bool | `True` | Write a journal entry on the firewall's device for every apply and rollback. |
 
 Per-firewall overrides of `auto_approve_creates`, `vrf_per_vdom`,
 `create_connected_prefixes`, `config_context`, `continue_on_error` and

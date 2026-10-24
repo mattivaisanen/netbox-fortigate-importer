@@ -27,7 +27,7 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.utils import timezone
 
-from . import integrations
+from . import integrations, journal
 from .mappers.base import Ref, is_ref_token, ref_key, unescape_literal, read_field, read_m2m, sort_values, write_field
 from .models import (
     ActionChoices, DecisionChoices, ImportRun, ManagedObject, OutcomeChoices, PlannedChange, RunStatusChoices,
@@ -682,6 +682,8 @@ class Applier:
         else:
             run.error = 'Nothing was applied: some items failed. Fix them or skip them, then apply again.'
         run.save()
+        if committed:
+            journal.applied(run, self.user)
 
 
 def apply(run, user, dry_run=False, expected_plan=None):

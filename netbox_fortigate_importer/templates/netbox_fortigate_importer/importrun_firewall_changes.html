@@ -1,0 +1,77 @@
+{% extends 'generic/object.html' %}
+{% load helpers %}
+{% load i18n %}
+
+{% block title %}{% trans "Import" %} {{ object }}{% endblock %}
+
+{% block content %}
+<div class="card">
+  <h2 class="card-header d-flex flex-wrap align-items-center gap-2">
+    <span class="flex-grow-1">
+      {% if against %}
+        {% if against.pk < object.pk %}
+          {% blocktrans with old=against.pk new=object.pk %}Firewall changes from import #{{ old }} to #{{ new }}{% endblocktrans %}
+        {% else %}
+          {% blocktrans with old=object.pk new=against.pk %}Firewall changes from import #{{ old }} to #{{ new }}{% endblocktrans %}
+        {% endif %}
+      {% else %}
+        {% trans "Firewall changes" %}
+      {% endif %}
+    </span>
+    {% if choices %}
+    <form method="get" class="d-flex gap-1 align-items-center">
+      <label for="fgi-against" class="small text-muted fw-normal">{% trans "Compare with" %}</label>
+      <select id="fgi-against" name="against" class="form-select form-select-sm" onchange="this.form.submit()">
+        {% for run in choices %}
+          <option value="{{ run.pk }}"{% if against and run.pk == against.pk %} selected{% endif %}>#{{ run.pk }} &middot; {{ run.created|date:"SHORT_DATETIME_FORMAT" }} &middot; {{ run.get_status_display }}</option>
+        {% endfor %}
+      </select>
+    </form>
+    {% endif %}
+  </h2>
+  <div class="card-body">
+    <p class="text-muted small mb-2">
+      {% trans "What changed in the FortiGate's own configuration between the two uploads, whatever NetBox has. Secrets are never stored, so changed passwords and keys do not show." %}
+    </p>
+    {% if not against %}
+      <span class="text-muted">{% trans "This is the first import of this FortiGate: nothing to compare with." %}</span>
+    {% elif not sections %}
+      <span class="text-success"><i class="mdi mdi-check-circle-outline"></i> {% trans "No changes: both imports have the same configuration." %}</span>
+    {% else %}
+      <div class="d-flex gap-2">
+        {% if counts.added %}<span class="badge text-bg-green fs-6">{% trans "Added" %}: {{ counts.added }}</span>{% endif %}
+        {% if counts.changed %}<span class="badge text-bg-blue fs-6">{% trans "Changed" %}: {{ counts.changed }}</span>{% endif %}
+        {% if counts.removed %}<span class="badge text-bg-red fs-6">{% trans "Removed" %}: {{ counts.removed }}</span>{% endif %}
+      </div>
+    {% endif %}
+  </div>
+  {% if sections %}
+  <div class="table-responsive">
+    <table class="table table-hover mb-0">
+      <thead>
+        <tr><th>{% trans "Section" %}</th><th>{% trans "VDOM" %}</th><th>{% trans "Object" %}</th><th>{% trans "Change" %}</th><th>{% trans "Details" %}</th></tr>
+      </thead>
+      <tbody>
+        {% for section in sections %}{% for entry in section.entries %}
+        <tr>
+          <td>{{ section.section }}</td>
+          <td>{{ section.vdom|placeholder }}</td>
+          <td class="font-monospace small">{{ entry.label }}</td>
+          <td>
+            {% if entry.action == 'added' %}<span class="badge text-bg-green">{% trans "Added" %}</span>
+            {% elif entry.action == 'removed' %}<span class="badge text-bg-red">{% trans "Removed" %}</span>
+            {% else %}<span class="badge text-bg-blue">{% trans "Changed" %}</span>{% endif %}
+          </td>
+          <td class="small">
+            {% for change in entry.fields %}
+              <div><strong>{{ change.field }}</strong>: <span class="text-danger text-decoration-line-through">{{ change.old }}</span> &rarr; <span class="text-success">{{ change.new }}</span></div>
+            {% endfor %}
+          </td>
+        </tr>
+        {% endfor %}{% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

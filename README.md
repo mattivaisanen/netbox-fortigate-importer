@@ -35,6 +35,25 @@ longer on the firewall is offered for deletion (or kept, see settings).
 Before writing, every object is checked again: if someone changed it after
 the plan was made, nothing is applied until you plan again.
 
+Uploading a configuration that was imported before (the same file, or the
+same configuration saved again, encrypted or not) says so: nothing changed
+on the firewall, and the plan only shows what changed in NetBox since.
+
+## Following a firewall over time
+
+- **Firewall changes** (a tab on every import): what changed in the
+  FortiGate's own configuration since its previous import, whatever NetBox
+  has: policies, addresses, routes, VPNs, settings added, changed or
+  removed, field by field. Compare with any other import of the same
+  firewall.
+- **Journal**: every apply and rollback adds an entry to the device's
+  journal (who, when, what changed, a link to the import). Turn it off with
+  `journal_entries`.
+- **Managed by FortiGate**: every NetBox object the importer manages shows
+  a panel with its FortiGate, the fields the importer owns, the last import
+  that synced it, and which owned fields were edited in NetBox since (the
+  next import asks what to keep).
+
 ## What it reads
 
 - Plain-text backups and `show full-configuration` output, gzip-compressed

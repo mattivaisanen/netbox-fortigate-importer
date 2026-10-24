@@ -6,7 +6,9 @@ from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import NoReverseMatch, reverse
 from django.utils.decorators import method_decorator
-from django.utils.translation import gettext as _
+from django.utils.formats import date_format
+from django.utils.timezone import localtime
+from django.utils.translation import gettext as _, gettext_lazy
 from django.views.decorators.csrf import csrf_exempt, csrf_protect
 from django.views.decorators.debug import sensitive_post_parameters, sensitive_variables
 from django.views.generic import View
@@ -15,9 +17,9 @@ from netbox.object_actions import AddObject, BulkDelete, BulkExport, DeleteObjec
 from netbox.views import generic
 from utilities.forms import restrict_form_fields
 from utilities.request import safe_for_redirect
-from utilities.views import ConditionalLoginRequiredMixin, register_model_view
+from utilities.views import ConditionalLoginRequiredMixin, ViewTab, register_model_view
 
-from . import dependencies, filtersets, forms, planner, services, tables
+from . import compare, dependencies, filtersets, forms, planner, services, tables
 from . import jobs
 from .jobs import active_job
 from .mappers import MapperError
@@ -172,6 +174,9 @@ class ImportRunUploadView(ConditionalLoginRequiredMixin, View):
 
     @staticmethod
     def _next(request, run):
+        same = compare.same_as(run)
+        if same is not None:
+            messages.warning(request, same_file_text(same))
         if run.binding_id is None:
             return reverse('plugins:netbox_fortigate_importer:importrun_bind', args=[run.pk])
         services.refresh_binding(run.binding, run.info)
@@ -180,6 +185,13 @@ class ImportRunUploadView(ConditionalLoginRequiredMixin, View):
         except (planner.PlanError, MapperError) as exc:
             messages.error(request, str(exc))
         return run.get_absolute_url()
+
+
+def same_file_text(same):
+    return _(
+        'This is the same configuration as import #{pk} ({status}, {when}). Nothing changed on the firewall; '
+        'the plan only shows what changed in NetBox since.'
+    ).format(pk=same.pk, status=same.get_status_display(), when=date_format(localtime(same.created), 'SHORT_DATETIME_FORMAT'))
 
 
 #
@@ -231,6 +243,38 @@ class ImportRunView(generic.ObjectView):
             'can_decide': can_decide,
             'sections': sorted({c for c in instance.changes.values_list('section', flat=True)}),
             'dry_run': instance.dry_run or {},
+            'same_as': compare.same_as(instance),
+        }
+
+
+@register_model_view(ImportRun, 'firewall_changes', path='firewall-changes')
+class ImportRunFirewallChangesView(generic.ObjectView):
+    """What changed on the firewall itself since an earlier import of it."""
+    queryset = ImportRun.objects.select_related('binding')
+    template_name = 'netbox_fortigate_importer/importrun_firewall_changes.html'
+    tab = ViewTab(label=gettext_lazy('Firewall changes'), visible=lambda run: run.binding_id is not None, weight=500)
+
+    def get_extra_context(self, request, instance):
+        runs = ImportRun.objects.restrict(request.user, 'view').filter(binding_id=instance.binding_id) \
+            .exclude(pk=instance.pk).exclude(status=RunStatusChoices.DISCARDED).defer('data')
+        against = None
+        if request.GET.get('against', '').isdigit():
+            against = runs.filter(pk=request.GET['against']).first()
+        if against is None:
+            previous = compare.previous_run(instance)
+            against = runs.filter(pk=previous.pk).first() if previous else None
+        sections = []
+        if against is not None:
+            old = ImportRun.objects.values_list('data', flat=True).get(pk=against.pk)
+            if against.pk > instance.pk:
+                sections = compare.compare(instance.data, old)
+            else:
+                sections = compare.compare(old, instance.data)
+        return {
+            'against': against,
+            'choices': runs.order_by('-pk')[:50],
+            'sections': sections,
+            'counts': compare.counts(sections),
         }
 
 

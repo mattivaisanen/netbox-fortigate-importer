@@ -21,7 +21,7 @@ import uuid
 from django.db import transaction
 from django.utils import timezone
 
-from . import integrations
+from . import integrations, journal
 from .applier import cascade_victims, error_text, fake_request, require
 from .models import ActionChoices, FortiGateBinding, ManagedObject, OutcomeChoices, PlannedChange, RunStatusChoices
 
@@ -171,6 +171,7 @@ def rollback(run, user):
             withdraw_requests(run, user)
             detach_device(run, changes)
             created = created_objects(changes)
+            created |= journal.own_entries(created)
             for change in changes:
                 try:
                     _undo(change, user, created)
@@ -185,6 +186,7 @@ def rollback(run, user):
             run.rolled_back = timezone.now()
             run.rollback_request_id = request_id
             run.save()
+    journal.rolled_back(run, user)
     return len(changes)
 
 

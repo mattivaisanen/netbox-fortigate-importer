@@ -90,6 +90,13 @@
 {% if object.error %}
 <div class="alert alert-danger" role="alert"><i class="mdi mdi-alert"></i> {{ object.error }}</div>
 {% endif %}
+{% if same_as %}
+<div class="alert alert-warning" role="alert">
+  <i class="mdi mdi-content-duplicate"></i>
+  {% blocktrans with pk=same_as.pk status=same_as.get_status_display when=same_as.created|timesince %}Same configuration as import #{{ pk }} ({{ status }}, {{ when }} ago). Nothing changed on the firewall; the plan only shows what changed in NetBox since.{% endblocktrans %}
+  <a href="{{ same_as.get_absolute_url }}">{% trans "Open it" %}</a>
+</div>
+{% endif %}
 {% if object.status == 'superseded' %}
 <div class="alert alert-secondary" role="alert">{% trans "A newer import of this FortiGate was applied after this plan was made. Upload the file again to import it." %}</div>
 {% endif %}

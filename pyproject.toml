@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "netbox-fortigate-importer"
-version = "0.7.0"
+version = "0.8.0"
 description = "Import FortiGate configurations into NetBox, with delta sync, review, dry run and rollback."
 requires-python = ">=3.10"
 license = "Apache-2.0"

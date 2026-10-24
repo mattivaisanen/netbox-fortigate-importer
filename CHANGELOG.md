@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+## 0.8.0 (2026-10-24)
+
+New:
+
+- Uploading a configuration that was imported before says so ("Same
+  configuration as import #12"), also when the same configuration comes as
+  a new encrypted backup. Nothing changed on the firewall; the plan only
+  shows what changed in NetBox since.
+- A "Firewall changes" tab on every import shows what changed in the
+  FortiGate's own configuration since its previous import: policies,
+  addresses, routes, VPNs and settings added, changed or removed, field by
+  field. You can compare with any other import of the same firewall.
+- Every apply and rollback adds an entry to the device's journal: who,
+  when, what changed, and a link to the import. Turn it off with the new
+  `journal_entries` setting.
+- Every NetBox object the importer manages shows a "Managed by FortiGate"
+  panel: the FortiGate, the fields the importer owns, the last import that
+  synced it, and which of those fields were edited in NetBox since, so you
+  know which edits the next import will ask about.
+
 ## 0.7.0 (2026-10-24)
 
 Fixed:

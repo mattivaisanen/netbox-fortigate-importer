@@ -306,6 +306,34 @@ inside, because the handlers must be replaced before anything reads the
 request body. The page posts with `fetch()` so an encrypted backup can be
 sent again with its password without choosing the file again.
 
+## History
+
+`compare.py` works on `ImportRun.data` only, never on NetBox:
+
+- `content_hash()` hashes the extracted data (without `stats`, `warnings`
+  and other bookkeeping) into `ImportRun.data_sha256`. The same
+  configuration gives the same hash whether it came plain or as an
+  encrypted backup (whose file hash differs every time). `same_as()` finds
+  an earlier run with the same file or data hash; the upload view and the
+  run page warn about it. The plan is still made: NetBox may have changed.
+- `compare()` lists firewall changes between two runs' data. List items are
+  matched by `id` (policies, DHCP servers), `seq` (static routes) or
+  `name`, with the address family; single blocks (BGP, OSPF, HA, settings)
+  are compared key by key. Shown on the run's "Firewall changes" tab.
+
+`journal.py` writes one `JournalEntry` per apply and rollback, after the
+transaction commits and outside its request, so it is not part of the
+import's change log and a rollback leaves it alone. It goes on the device,
+or on the FortiGate while it has none. Failures are logged, never raised.
+Rolling back an import that created the device deletes the importer's own
+entries on it (`journal.own_entries()`) instead of refusing as for other
+newer work.
+
+`template_content.ManagedByFortiGatePanel` has `models = None` (every
+detail page) and shows the `ManagedObject` rows of the object: owned
+fields from `ManagedObject.fields`, each compared with the object now
+(`read_field`/`read_m2m`, as the planner does) to mark NetBox edits.
+
 ## Working with netbox-change-approval
 
 `integrations/change_approval.py`. The importer's own models are not
@@ -335,6 +363,8 @@ the user, so change-approval decides like for any edit:
 delta, conflicts, drift, rollback, two firewalls), `tests/test_views.py`
 (upload, password prompt, memory-only upload, review, API, jobs),
 `tests/test_safety.py` (permissions, cascades, locking, matching),
-`tests/test_review.py` (dependency prompts, dry-run results, job errors) and
+`tests/test_review.py` (dependency prompts, dry-run results, job errors),
+`tests/test_history.py` (same-file warning, journal, managed panel,
+firewall changes) and
 `tests/test_change_approval.py`, `tests/test_security.py` and
 `tests/test_routing.py` (skipped unless the plugin is installed).

@@ -14,7 +14,7 @@ class FortiGateImporterConfig(PluginConfig):
     name = 'netbox_fortigate_importer'
     verbose_name = 'FortiGate Importer'
     description = 'Import FortiGate configurations with delta sync, review, dry run and rollback.'
-    version = '0.7.0'
+    version = '0.8.0'
     author = 'Matti'
     base_url = 'fortigate-importer'
     # Only claim what CI tests (.github/workflows/test.yml).
@@ -41,6 +41,8 @@ class FortiGateImporterConfig(PluginConfig):
         # Apply: keep going past failing items (each in its own savepoint)
         # instead of rolling the whole run back.
         'continue_on_error': False,
+        # Write a journal entry on the firewall's device for every apply and rollback.
+        'journal_entries': True,
     }
 
     menu = 'navigation.menu'

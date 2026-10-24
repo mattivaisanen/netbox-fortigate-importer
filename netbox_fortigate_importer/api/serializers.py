@@ -37,7 +37,7 @@ class ImportRunSerializer(ValidatedModelSerializer):
         model = ImportRun
         fields = (
             'id', 'url', 'display', 'binding', 'status', 'created', 'created_by', 'filename', 'file_sha256',
-            'file_size', 'encrypted', 'info', 'summary', 'options', 'planned', 'applied', 'applied_by',
+            'data_sha256', 'file_size', 'encrypted', 'info', 'summary', 'options', 'planned', 'applied', 'applied_by',
             'rolled_back', 'apply_request_id', 'rollback_request_id', 'dry_run', 'error',
         )
         read_only_fields = fields

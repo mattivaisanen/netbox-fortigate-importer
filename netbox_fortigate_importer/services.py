@@ -13,6 +13,7 @@ import re
 from django.db.models import Q
 from django.views.decorators.debug import sensitive_variables
 
+from .compare import content_hash
 from .extract import load
 from .models import FortiGateBinding, ImportRun, RunStatusChoices
 from .parser.files import is_encrypted
@@ -41,6 +42,7 @@ def ingest(data: bytes, filename, user, password=None):
     del data
     run = ImportRun(
         filename=(filename or '')[:255], file_sha256=digest, file_size=size, encrypted=encrypted,
+        data_sha256=content_hash(document),
         info=document['info'], data=document, created_by=user, status=RunStatusChoices.PARSED,
     )
     run.binding = find_binding(document['info'])

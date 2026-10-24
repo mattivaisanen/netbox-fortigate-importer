@@ -42,14 +42,16 @@ the plan was made, nothing is applied until you plan again.
   including the newer encryption of FortiOS 7.2.9, 7.4.4, 7.6 and later. You
   are asked for the password when the backup is encrypted.
 - Single-VDOM and multi-VDOM configurations, from hardware and VM models,
-  FortiOS 5.4 to 7.4.
+  FortiOS 5.4 to 7.4. Backups of single VDOMs (without the global part)
+  are refused: back up the full configuration instead.
 
 ## What it creates in NetBox
 
 - The device's platform (FortiOS), serial number, primary IP and a
   `fortigate` key in its config context (firmware, HA, DNS, NTP, SNMP,
   syslog, FortiAnalyzer/FortiManager).
-- HA clusters as virtual chassis, VDOMs as virtual device contexts, and a
+- HA clusters as virtual chassis (import both units; the first one becomes
+  the master), VDOMs as virtual device contexts, and a
   VRF per VDOM.
 - Interfaces (physical, aggregate, hard/soft switch, VLAN, tunnel,
   loopback, VDOM link) with their VLANs, IP addresses and connected

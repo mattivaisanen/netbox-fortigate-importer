@@ -36,6 +36,7 @@ class ImportRunJob(JobRunner):
 
         if action == 'dry-run':
             applier.apply(run, user, dry_run=True, expected_plan=planned)
+            run.refresh_from_db(fields=['dry_run'])
             self.logger.info(f'Dry run: {counts_text(run.dry_run.get("counts"))}')
         elif action == 'apply':
             applier.apply(run, user, expected_plan=planned)

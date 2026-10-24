@@ -2,13 +2,13 @@
 from core.models import ObjectType
 from dcim.models import Device, Interface
 from django.contrib.auth import get_user_model
-from ipam.models import IPAddress
+from ipam.models import VLAN, IPAddress
 from users.models import ObjectPermission
 
 from netbox_fortigate_importer import applier, planner, rollback, services
 from netbox_fortigate_importer.models import FortiGateBinding, OutcomeChoices, RunStatusChoices
 
-from .test_apply import HQ, ImportTestCase, data_of
+from .test_apply import HQ, ImportTestCase, data_of, interface
 
 
 class PermissionTest(ImportTestCase):
@@ -94,6 +94,14 @@ class CascadeTest(ImportTestCase):
         self.assertTrue(IPAddress.objects.filter(address='192.0.2.99/24').exists())
         run.refresh_from_db()
         self.assertEqual(run.status, RunStatusChoices.APPLIED)
+
+    def test_rollback_refuses_to_clear_references_to_imported_objects(self):
+        binding, run = self.first_import()
+        switch = Device.objects.create(name='sw1', site=self.site, device_type=self.device_type, role=self.role)
+        Interface.objects.create(device=switch, name='ge1', type='1000base-t', mode='access',
+                                 untagged_vlan=VLAN.objects.get(vid=10))
+        with self.assertRaisesMessage(rollback.RollbackError, 'untagged VLAN of interface ge1'):
+            rollback.rollback(run, self.user)
 
     def test_delete_refuses_to_take_unmanaged_objects(self):
         binding, _ = self.first_import()
@@ -263,12 +271,25 @@ class RecordTest(ImportTestCase):
         with mock.patch.object(applier.Applier, 'write', write):
             self.apply(run)
         self.assertEqual(run.status, RunStatusChoices.APPLIED)
-        self.assertEqual(run.changes.get(key='device').outcome, OutcomeChoices.FAILED)
+        # Written, so "applied", with what was not written.
+        device = run.changes.get(key='device')
+        self.assertEqual(device.outcome, OutcomeChoices.APPLIED)
+        self.assertEqual(device.error, 'written without primary_ip4: no primary IP today')
         managed = binding.managed_objects.get(key='device')
         self.assertNotIn('primary_ip4', managed.fields)
         # The next plan offers the primary IP again.
         row = self.plan(binding, data_of(HQ)).changes.get(key='device')
         self.assertIn('primary_ip4', [d['field'] for d in row.diff])
+
+    def test_skipped_management_ip_leaves_the_device_applied(self):
+        binding = self.make_binding()
+        run = self.plan(binding, data_of(HQ))
+        run.changes.filter(key='ip/mgmt/192.168.255.10').update(decision='skipped')
+        self.apply(run)
+        self.assertEqual(run.status, RunStatusChoices.APPLIED, run.error)
+        device = run.changes.get(key='device')
+        self.assertEqual(device.outcome, OutcomeChoices.APPLIED)
+        self.assertIn('written without primary_ip4: needs', device.error)
 
     def test_rollback_refuses_without_change_log(self):
         from core.models import ObjectChange
@@ -300,3 +321,41 @@ class TruncationFlagTest(ImportTestCase):
         data = load_bytes(text.encode())
         self.assertTrue(data['truncated'])
         self.assertFalse(any('may be truncated' in w for w in data['warnings']))
+
+
+class MovedObjectTest(ImportTestCase):
+    def test_ip_moved_to_another_interface_moves(self):
+        binding, _ = self.first_import()
+        ip = IPAddress.objects.get(address='172.16.50.1/24')
+        data = data_of(HQ)
+        interface(data, 'port15')['ip'], interface(data, 'dmz')['ip'] = interface(data, 'dmz')['ip'], None
+        run = self.plan(binding, data)
+        old = run.changes.get(key='ip/dmz/172.16.50.1')
+        self.assertEqual((old.action, old.note), ('unmanage', 'kept: now imported as ip/port15/172.16.50.1'))
+        new = run.changes.get(key='ip/port15/172.16.50.1')
+        self.assertEqual((new.action, new.object_id), ('update', ip.pk))
+        self.approve_all(run)
+        self.apply(run)
+        self.assertEqual(run.status, RunStatusChoices.APPLIED, run.error)
+        ip.refresh_from_db()
+        self.assertEqual(ip.assigned_object.name, 'port15')
+        self.assertEqual(set(binding.managed_objects.filter(key__startswith='ip/').filter(
+            object_id=ip.pk).values_list('key', flat=True)), {'ip/port15/172.16.50.1'})
+
+
+class HATest(ImportTestCase):
+    def test_second_unit_joins_the_cluster(self):
+        first, _ = self.first_import()
+        second = self.make_binding(name='HQ-FW02')
+        data = data_of(HQ)
+        data['info']['serial'] = 'FG100FTK20005678'
+        data['ha']['priority'] = 100
+        run = self.plan(second, data)
+        self.assertEqual(run.changes.get(key='ha/virtual-chassis').action, 'adopt')
+        self.approve_all(run)
+        self.apply(run)
+        self.assertEqual(run.status, RunStatusChoices.APPLIED, run.error)
+        device = Device.objects.get(pk=second.device_id)
+        self.assertEqual((device.virtual_chassis.name, device.vc_position), ('HQ-FW-HA', 2))
+        self.assertEqual(device.virtual_chassis.master_id, first.device_id)
+        self.assertEqual(device.serial, 'FG100FTK20005678')

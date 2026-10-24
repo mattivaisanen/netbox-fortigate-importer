@@ -129,7 +129,11 @@ def bind(run, device, name=None):
         )
         if FortiGateBinding.objects.filter(name=binding.name).exists():
             binding.name = f'{binding.name} ({device.pk})'[:100]
-    binding.serial = info.get('serial') or binding.serial
+    # The serial the FortiGate had, when this configuration's differs (a
+    # replaced unit, or the wrong device): the device page warns.
+    serial = info.get('serial')
+    binding.replaced_serial = binding.serial if binding.serial and serial and serial != binding.serial else ''
+    binding.serial = serial or binding.serial
     binding.hostname = info.get('hostname') or binding.hostname
     binding.model_code = info.get('model_code') or binding.model_code
     binding.firmware = info.get('version') or binding.firmware

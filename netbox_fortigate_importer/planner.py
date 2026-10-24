@@ -101,6 +101,11 @@ class Planner:
         self.notes = []
         #: key -> the other FortiGate or device that has the object.
         self.skipped_elsewhere = {}
+        #: (content type pk, pk) -> ManagedObject, for managed keys the configuration no longer has.
+        self.orphans = {}
+        #: New key -> the ManagedObject of the same object under its old key
+        #: (an IP address moved to another interface).
+        self.rekeyed = {}
 
     # Values
 
@@ -211,6 +216,8 @@ class Planner:
         order = 0
         wanted_keys = set()
         ordered = sorted(desired_objects, key=lambda d: (d.order, d.key))
+        wanted = {d.key for d in ordered}
+        self.orphans = {(m.object_type_id, m.object_id): m for k, m in self.managed.items() if k not in wanted}
         # Find every object first, so references to objects planned later
         # (a device's primary IP) resolve when the values are compared.
         found = [self.find_one(desired) for desired in ordered]
@@ -223,8 +230,13 @@ class Planner:
         held = Counter()
         truncated = self.truncated()
         vdoms = set((self.run.data or {}).get('vdoms') or {})
+        moved = {m.key: new_key for new_key, m in self.rekeyed.items()}
         for key, managed in sorted(self.managed.items()):
             if key in wanted_keys:
+                continue
+            if key in moved:
+                order += 1
+                rows.append(self.plan_rekey(managed, order, moved[key]))
                 continue
             vdom = ((managed.fields or {}).get(META) or {}).get('vdom') or ''
             if truncated:
@@ -248,7 +260,14 @@ class Planner:
 
     def find_one(self, desired):
         """(object, how, notes) for one desired object; records its pk."""
-        obj, how, note = self.find(desired, self.managed.get(desired.key))
+        managed = self.managed.get(desired.key)
+        obj, how, note = self.find(desired, managed)
+        if obj is not None and how == 'adopt' and managed is None:
+            orphan = self.orphans.get((ContentType.objects.get_for_model(desired.model).pk, obj.pk))
+            if orphan is not None:
+                # The same object under a new key: still ours, not adopted.
+                self.rekeyed[desired.key] = orphan
+                how, note = 'managed', ''
         notes = [n for n in (desired.note, note) if n]
         if obj is not None and how == 'adopt' and not (desired.shared or desired.release_only):
             owner = self.assigned_elsewhere(obj)
@@ -269,6 +288,7 @@ class Planner:
 
     def plan_one(self, desired, order, obj, how, notes):
         managed = self.managed.get(desired.key)
+        rekeyed = self.rekeyed.get(desired.key)
         if how == 'elsewhere':
             self.notes.append(f'{desired.label}: NetBox has it on {self.skipped_elsewhere[desired.key]}, not this '
                               'firewall; left out. Give each firewall its own VRF to import overlapping addresses.')
@@ -294,8 +314,8 @@ class Planner:
 
         current = snapshot(obj, desired) if obj is not None else {}
         last = None
-        if managed is not None and how == 'managed':
-            last = {k: v for k, v in (managed.fields or {}).items() if k != META}
+        if how == 'managed' and (managed or rekeyed) is not None:
+            last = {k: v for k, v in ((managed or rekeyed).fields or {}).items() if k != META}
 
         diff = []
         conflict = update = False
@@ -344,6 +364,8 @@ class Planner:
             notes.append(f'also managed by {", ".join(others)}')
 
         flags = [f for f in ('shared', 'release_only', 'partial') if getattr(desired, f)]
+        if rekeyed is not None and ((rekeyed.fields or {}).get(META) or {}).get('adopted'):
+            flags.append('adopted')
         return PlannedChange(
             run=self.run, order=order, key=desired.key, section=desired.section, vdom=desired.vdom,
             label=desired.label[:300], action=action,
@@ -357,6 +379,19 @@ class Planner:
             note='; '.join(dict.fromkeys(notes))[:500],
             decision=DecisionChoices.APPROVED if auto else DecisionChoices.PENDING,
             managed_before=managed.snapshot() if managed is not None else None,
+        )
+
+    def plan_rekey(self, managed, order, new_key):
+        """The object is still imported, under a new key: only the old record goes."""
+        meta = (managed.fields or {}).get(META, {})
+        return PlannedChange(
+            run=self.run, order=order, key=managed.key, section=meta.get('section', ''),
+            vdom=meta.get('vdom', ''), label=(meta.get('label') or managed.key)[:300],
+            action=ActionChoices.UNMANAGE, object_type=managed.object_type, object_id=managed.object_id,
+            proposed={'flags': meta.get('flags', []), 'order': meta.get('order')},
+            last_applied={k: v for k, v in (managed.fields or {}).items() if k != META},
+            note=f'kept: now imported as {new_key}', decision=DecisionChoices.APPROVED,
+            managed_before=managed.snapshot(),
         )
 
     def plan_removal(self, managed, order):

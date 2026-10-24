@@ -124,6 +124,38 @@ class ViewTest(ViewBase):
         self.assertEqual(run.binding.device.device_type.manufacturer, self.manufacturer)
         self.assertEqual(run.binding.device.name, 'BRANCH1-FW01')
 
+    def test_new_device_found_in_netbox_is_linked(self):
+        # "A new device" whose name and site NetBox already has: adopted, and
+        # the FortiGate is linked to it by the apply, not only by the next plan.
+        device = Device.objects.create(name='branch1-fw01', site=self.site, device_type=self.device_type,
+                                       role=self.role)
+        self.upload(read(BRANCH))
+        run = ImportRun.objects.get()
+        bind = reverse(URL + 'importrun_bind', args=[run.pk])
+        self.client.post(bind, {'mode': 'new', 'name': 'branch1-fw01', 'site': self.site.pk, 'role': self.role.pk})
+        run.refresh_from_db()
+        self.assertEqual(run.changes.get(key='device').action, ActionChoices.ADOPT)
+        run.changes.filter(decision=DecisionChoices.PENDING).update(decision=DecisionChoices.APPROVED)
+        applier.apply(run, self.user)
+        run.refresh_from_db()
+        self.assertEqual(run.status, RunStatusChoices.APPLIED, run.error)
+        self.assertEqual(run.binding.device, device)
+
+        # A linked import can't be moved to another FortiGate.
+        other = Device.objects.create(name='other', site=self.site, device_type=self.device_type, role=self.role)
+        response = self.client.post(bind, {'mode': 'existing', 'device': other.pk})
+        self.assertRedirects(response, run.get_absolute_url(), fetch_redirect_response=False)
+        self.assertEqual(ImportRun.objects.get(pk=run.pk).binding.device, device)
+
+    def test_choosing_a_device_of_another_serial_warns(self):
+        device = Device.objects.create(name='b1', site=self.site, device_type=self.device_type, role=self.role)
+        FortiGateBinding.objects.create(name='Branch', device=device, serial='FGT60FTK21000001')
+        self.upload(read(BRANCH))
+        run = ImportRun.objects.get()
+        response = self.client.post(reverse(URL + 'importrun_bind', args=[run.pk]),
+                                    {'mode': 'existing', 'device': device.pk}, follow=True)
+        self.assertContains(response, 'This device was FortiGate FGT60FTK21000001')
+
     def test_change_list_has_pages_and_checkboxes(self):
         device = Device.objects.create(name='b1', site=self.site, device_type=self.device_type, role=self.role)
         FortiGateBinding.objects.create(name='Branch', device=device, serial='FGT60FTK21005678')

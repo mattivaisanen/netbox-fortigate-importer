@@ -38,6 +38,46 @@ class ChangeApprovalTest(ImportTestCase):
         run.refresh_from_db()
         return run
 
+    def test_failed_apply_leaves_nothing_waiting(self):
+        from netbox_change_approval.models import ChangeRequest
+
+        from unittest import mock
+
+        binding, _ = self.first_import()
+        data = data_of(HQ)
+        interface(data, 'wan1')['description'] = 'New circuit'
+        interface(data, 'port1')['description'] = 'Fails'
+        run = self.plan(binding, data)
+        self.approve_all(run)
+        original = applier.Applier.write
+
+        def write(self, row, deferred=False):
+            if row.key == 'interface/port1':
+                raise ValueError('NetBox refuses it')  # the whole apply rolls back
+            return original(self, row, deferred)
+
+        with mock.patch.object(applier.Applier, 'write', write):
+            applier.apply(run, self.engineer)
+        run.refresh_from_db()
+        self.assertEqual(run.status, RunStatusChoices.PLANNED)
+        self.assertEqual(run.changes.get(key='interface/port1').outcome, OutcomeChoices.FAILED)
+        self.assertEqual(run.changes.get(key='interface/wan1').outcome, OutcomeChoices.SKIPPED)
+        self.assertFalse(ChangeRequest.objects.exists())
+
+    def test_rejected_deferred_fields_keep_the_object(self):
+        # Only the primary IP waited for approval; the device itself was written.
+        from types import SimpleNamespace
+
+        from netbox_change_approval.models import StatusChoices
+
+        from netbox_fortigate_importer.integrations.change_approval import request_saved
+
+        binding, run = self.first_import()
+        run.changes.filter(key='device').update(outcome=OutcomeChoices.SUBMITTED, change_request_id=4242)
+        request_saved(None, SimpleNamespace(pk=4242, status=StatusChoices.REJECTED))
+        self.assertEqual(run.changes.get(key='device').outcome, OutcomeChoices.REJECTED)
+        self.assertTrue(ManagedObject.objects.filter(binding=binding, key='device').exists())
+
     def test_superuser_import_needs_no_approval(self):
         _, run = self.first_import()
         self.assertEqual(run.status, RunStatusChoices.APPLIED)

@@ -208,6 +208,18 @@ class DeviceTypeInterfacesTest(ViewBase):
 
 
 class JobLogTest(ViewBase):
+    def test_dry_run_job_logs_its_own_counts(self):
+        device = Device.objects.create(name='b1', site=self.site, device_type=self.device_type, role=self.role)
+        FortiGateBinding.objects.create(name='Branch', device=device, serial='FGT60FTK21005678')
+        self.upload(read(BRANCH))
+        run = ImportRun.objects.get()
+        job = ImportRunJob.enqueue(instance=run, user=self.user, immediate=True, action='dry-run')
+        job.refresh_from_db()
+        run.refresh_from_db()
+        messages = ' '.join(entry['message'] for entry in job.log_entries)
+        self.assertIn(f'Dry run: {counts_text(run.dry_run["counts"])}', messages)
+        self.assertNotIn('nothing to do', messages)
+
     def test_counts_are_written_out(self):
         self.assertEqual(counts_text({'applied': 3, 'failed': 1, 'skipped': 0}), '3 applied, 1 failed')
         self.assertEqual(counts_text({}), 'nothing to do')

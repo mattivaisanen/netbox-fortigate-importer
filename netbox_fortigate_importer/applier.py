@@ -107,10 +107,12 @@ _CASCADE_IGNORED = {('extras', 'taggeditem'), ('extras', 'cachedvalue'), ('extra
                     ('extras', 'subscription')}
 
 
-def cascade_victims(obj, allowed=frozenset()):
+def cascade_victims(obj, allowed=frozenset(), owned=frozenset()):
     """
     What deleting `obj` would also delete (database cascades and NetBox's
-    generic relations), apart from `allowed` ((content type pk, pk) pairs).
+    generic relations) or change (references set to null), apart from
+    `allowed` ((content type pk, pk) pairs). References on `owned` objects
+    (this FortiGate's, whose fields the plan writes) may be cleared.
     Returns labels such as "IP address 10.0.0.1/24", at most 20.
     """
     from django.contrib.contenttypes.models import ContentType
@@ -139,6 +141,16 @@ def cascade_victims(obj, allowed=frozenset()):
             continue
         for instance in queryset[:50]:
             consider(instance)
+    # SET_NULL: objects that would only lose their reference (a switch port's
+    # untagged VLAN, another device's primary IP) are changed too.
+    deleted = {(type(i), i.pk) for instances in collector.data.values() for i in instances}
+    for (field, _), batches in collector.field_updates.items():
+        for batch in batches:
+            for instance in list(batch)[:50]:
+                pair = (ContentType.objects.get_for_model(instance).pk, instance.pk)
+                if (type(instance), instance.pk) in deleted or pair in allowed or pair in owned:
+                    continue
+                found.append(f'{field.verbose_name} of {instance._meta.verbose_name} {instance}')
     return found[:20]
 
 
@@ -249,7 +261,7 @@ class Applier:
             'flags': proposed.get('flags', []), 'model': row.object_type.natural_key(),
             # Made by someone else first: a removal only stops managing it.
             'adopted': (row.action == ActionChoices.ADOPT or row.key in self.matched
-                        or bool(earlier_meta.get('adopted'))),
+                        or 'adopted' in proposed.get('flags', []) or bool(earlier_meta.get('adopted'))),
         }
         return values
 
@@ -351,8 +363,9 @@ class Applier:
         if created or row.key in self.matched:
             if self.tag is not None and hasattr(obj, 'tags'):
                 obj.tags.add(self.tag)
-            if row.key == 'device':
-                self.attach_device(obj)
+        if row.key == 'device' and self.binding.device_id != obj.pk:
+            # Created, or a new device's name and site found in NetBox.
+            self.attach_device(obj)
         return obj
 
     def made_by_netbox(self, row, model):
@@ -400,7 +413,8 @@ class Applier:
             self.save(obj, 'change')
         else:
             require(self.user, obj, 'delete')
-            victims = cascade_victims(obj, self.removing)
+            owned = set(ManagedObject.objects.filter(binding=self.binding).values_list('object_type_id', 'object_id'))
+            victims = cascade_victims(obj, self.removing, owned)
             if victims:
                 raise ApplyError('deleting it would also delete ' + ', '.join(victims) +
                                  '; remove or move those first, or choose "stop managing"')
@@ -568,8 +582,10 @@ class Applier:
             if outcome not in (OutcomeChoices.APPLIED, OutcomeChoices.SUBMITTED) or row.key not in self.keys:
                 continue
             if (row.proposed or {}).get('deferred') and outcome == OutcomeChoices.APPLIED:
-                if self.item(row, lambda r: self.write(r, deferred=True), record=False) != OutcomeChoices.APPLIED:
+                deferred = self.item(row, lambda r: self.write(r, deferred=True), record=False)
+                if deferred != OutcomeChoices.APPLIED:
                     self.deferred_failed.add(row.key)
+                    self.deferred_outcome(row, deferred)
         for row in todo:
             outcome = self.results[row.key]['outcome']
             if row.key in self.deferred_failed:
@@ -577,6 +593,19 @@ class Applier:
                 self.managed_after(row, OutcomeChoices.APPLIED, deferred_written=False)
             elif outcome in (OutcomeChoices.APPLIED, OutcomeChoices.SUBMITTED):
                 self.managed_after(row, outcome, deferred_written=outcome == OutcomeChoices.APPLIED)
+
+    def deferred_outcome(self, row, outcome):
+        """
+        The object was written, its fields written last were not: it stays
+        "applied", with why, unless the failure undoes the whole apply.
+        """
+        if outcome == OutcomeChoices.FAILED and not self.options.get('continue_on_error'):
+            return
+        if outcome not in (OutcomeChoices.SKIPPED, OutcomeChoices.FAILED):
+            return  # waiting for approval: shown as such
+        names = ', '.join(sorted((row.proposed or {}).get('deferred', {})))
+        self.results[row.key] = {'outcome': OutcomeChoices.APPLIED,
+                                 'error': f'written without {names}: {self.results[row.key]["error"]}'}
 
     def counts(self):
         counts = {}
@@ -629,7 +658,8 @@ class Applier:
         for key, result in self.results.items():
             row = by_key[key]
             outcome = result['outcome']
-            if not committed and outcome == OutcomeChoices.APPLIED:
+            if not committed and outcome in (OutcomeChoices.APPLIED, OutcomeChoices.SUBMITTED, OutcomeChoices.BLOCKED):
+                # Rolled back with everything else, change requests included.
                 outcome = OutcomeChoices.SKIPPED
                 result = {'outcome': outcome, 'error': 'rolled back: another item failed'}
             row.outcome = outcome

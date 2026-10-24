@@ -155,11 +155,13 @@ class PlannedChangeViewSet(NetBoxReadOnlyModelViewSet):
         if not request.user.has_perm('netbox_fortigate_importer.change_plannedchange'):
             raise PermissionDenied()
         change = self.get_object()
-        if change.run.status != RunStatusChoices.PLANNED or jobs.busy(change.run):
-            raise ValidationError({'decision': 'The run is not ready for review.'})
         serializer = self.get_serializer(change, data={'decision': request.data.get('decision')}, partial=True)
         serializer.is_valid(raise_exception=True)
         with transaction.atomic():
+            # Waits for an apply that holds the run, then sees its job.
+            run = ImportRun.objects.select_for_update().get(pk=change.run_id)
+            if run.status != RunStatusChoices.PLANNED or jobs.busy(run):
+                raise ValidationError({'decision': 'The run is not ready for review.'})
             change.decision = serializer.validated_data['decision']
             change.decided_by = request.user
             change.full_clean()

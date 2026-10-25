@@ -74,6 +74,11 @@ class HistoryTest(ImportTestCase):
         self.edit_in_netbox(vlan10, description='edited by hand')
         self.assertContains(self.client.get(vlan10.get_absolute_url()), 'fgi-edited')
 
+        page = self.client.get(binding.device.get_absolute_url())
+        self.assertContains(page, 'Imported as')
+        self.assertContains(page, 'Owned fields')
+        self.assertNotContains(page, 'Managed by FortiGate', msg_prefix='one panel on the device')
+
         data = data_of(HQ)
         data['vdoms']['root']['policies'][0]['enabled'] = False
         second = self.plan(binding, data)

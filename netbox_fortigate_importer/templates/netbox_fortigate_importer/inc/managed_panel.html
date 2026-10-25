@@ -5,28 +5,8 @@
   <h2 class="card-header">{% trans "Managed by FortiGate" %}</h2>
   <table class="table table-hover attr-table">
     <tr><th scope="row">{% trans "FortiGate" %}</th><td>{{ row.binding|linkify }}</td></tr>
-    <tr><th scope="row">{% trans "FortiGate object" %}</th><td class="font-monospace small text-break">{{ row.key }}</td></tr>
-    <tr>
-      <th scope="row">{% trans "Owned fields" %}</th>
-      <td>
-        {% for label, edited in fields %}
-          {% if edited %}
-            <span class="badge text-bg-orange fgi-edited" title="{% trans 'Edited in NetBox since the last import. The next import will ask what to keep.' %}"><i class="mdi mdi-pencil"></i> {{ label }}</span>
-          {% else %}
-            <span class="badge text-bg-secondary">{{ label }}</span>
-          {% endif %}
-        {% empty %}{{ ''|placeholder }}{% endfor %}
-      </td>
-    </tr>
-    <tr>
-      <th scope="row">{% trans "Last synced" %}</th>
-      <td>{% if row.last_run %}<a href="{{ row.last_run.get_absolute_url }}">#{{ row.last_run.pk }}</a> <span class="text-muted small">{{ row.updated|timesince }}</span>{% else %}{{ ''|placeholder }}{% endif %}
-        {% if not row.confirmed %}<span class="badge text-bg-orange">{% trans "waiting for approval" %}</span>{% endif %}</td>
-    </tr>
+    {% include 'netbox_fortigate_importer/inc/managed_rows.html' %}
   </table>
-  <div class="card-footer text-muted small">
-    <i class="mdi mdi-information-outline"></i>
-    {% trans "Changes to these fields are compared with the firewall on every import. Edit them on the FortiGate, or expect a conflict to review." %}
-  </div>
+  <div class="card-footer">{% include 'netbox_fortigate_importer/inc/managed_note.html' %}</div>
 </div>
 {% endfor %}

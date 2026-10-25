@@ -4,20 +4,6 @@ from django.db import models
 from netbox.plugins import PluginTemplateExtension
 
 
-class DeviceFortiGatePanel(PluginTemplateExtension):
-    """On a device bound to a FortiGate: its binding and last import."""
-    models = ('dcim.device',)
-
-    def right_page(self):
-        device = self.context['object']
-        binding = device.fortigate_bindings.first()
-        if binding is None:
-            return ''
-        return self.render('netbox_fortigate_importer/inc/device_panel.html', extra_context={
-            'binding': binding, 'last_run': binding.last_run,
-        })
-
-
 def owned_fields(managed, obj):
     """[(label, edited)] for the fields the importer owns on `obj`."""
     from .mappers.base import read_field, read_m2m
@@ -39,6 +25,37 @@ def owned_fields(managed, obj):
     return found
 
 
+def managed_rows(obj, request):
+    """[(ManagedObject, owned fields)] for `obj`, if the user may see them."""
+    from .models import ManagedObject
+
+    if request is None or not request.user.has_perm('netbox_fortigate_importer.view_fortigatebinding'):
+        return []
+    rows = ManagedObject.objects.filter(
+        object_type=ContentType.objects.get_for_model(obj), object_id=obj.pk,
+    ).select_related('binding', 'last_run')
+    return [(row, owned_fields(row, obj)) for row in rows]
+
+
+class DeviceFortiGatePanel(PluginTemplateExtension):
+    """
+    On a device bound to a FortiGate: its binding, last import and, since the
+    device is itself a managed object, the fields the importer owns on it.
+    One panel, so the device page does not also get "Managed by FortiGate".
+    """
+    models = ('dcim.device',)
+
+    def right_page(self):
+        device = self.context['object']
+        binding = device.fortigate_bindings.first()
+        if binding is None:
+            return ''
+        return self.render('netbox_fortigate_importer/inc/device_panel.html', extra_context={
+            'binding': binding, 'last_run': binding.last_run,
+            'managed': managed_rows(device, self.context.get('request')),
+        })
+
+
 class ManagedByFortiGatePanel(PluginTemplateExtension):
     """
     On every object the importer manages: which FortiGate owns it, which
@@ -48,22 +65,15 @@ class ManagedByFortiGatePanel(PluginTemplateExtension):
     models = None
 
     def right_page(self):
-        from .models import ManagedObject
-
         obj = self.context.get('object')
-        request = self.context.get('request')
         if not isinstance(obj, models.Model) or obj.pk is None or obj._meta.app_label == 'netbox_fortigate_importer':
             return ''
-        if request is None or not request.user.has_perm('netbox_fortigate_importer.view_fortigatebinding'):
+        if obj._meta.label_lower == 'dcim.device' and obj.fortigate_bindings.exists():
+            return ''  # DeviceFortiGatePanel shows it
+        managed = managed_rows(obj, self.context.get('request'))
+        if not managed:
             return ''
-        rows = list(ManagedObject.objects.filter(
-            object_type=ContentType.objects.get_for_model(obj), object_id=obj.pk,
-        ).select_related('binding', 'last_run'))
-        if not rows:
-            return ''
-        return self.render('netbox_fortigate_importer/inc/managed_panel.html', extra_context={
-            'managed': [(row, owned_fields(row, obj)) for row in rows],
-        })
+        return self.render('netbox_fortigate_importer/inc/managed_panel.html', extra_context={'managed': managed})
 
 
 template_extensions = [DeviceFortiGatePanel, ManagedByFortiGatePanel]

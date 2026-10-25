@@ -7,10 +7,16 @@
     <tr><th scope="row">{% trans "Firmware" %}</th><td>{{ binding.firmware|placeholder }}</td></tr>
     <tr><th scope="row">{% trans "Last import" %}</th>
       <td>{% if last_run %}<a href="{{ last_run.get_absolute_url }}">#{{ last_run.pk }}</a> {% badge last_run.get_status_display bg_color=last_run.get_status_color %} <span class="text-muted small">{{ last_run.created|timesince }}</span>{% else %}{{ ''|placeholder }}{% endif %}</td></tr>
+    {% for row, fields in managed %}
+      {% include 'netbox_fortigate_importer/inc/managed_rows.html' %}
+    {% endfor %}
   </table>
-  {% if perms.netbox_fortigate_importer.add_importrun %}
-  <div class="card-footer text-end">
-    <a href="{% url 'plugins:netbox_fortigate_importer:importrun_upload' %}" class="btn btn-sm btn-primary"><i class="mdi mdi-upload"></i> {% trans "Import configuration" %}</a>
+  {% if managed or perms.netbox_fortigate_importer.add_importrun %}
+  <div class="card-footer d-flex align-items-center gap-2">
+    {% if managed %}{% include 'netbox_fortigate_importer/inc/managed_note.html' %}{% endif %}
+    {% if perms.netbox_fortigate_importer.add_importrun %}
+    <a href="{% url 'plugins:netbox_fortigate_importer:importrun_upload' %}" class="btn btn-sm btn-primary ms-auto text-nowrap"><i class="mdi mdi-upload"></i> {% trans "Import configuration" %}</a>
+    {% endif %}
   </div>
   {% endif %}
 </div>

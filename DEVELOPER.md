@@ -333,6 +333,9 @@ newer work.
 detail page) and shows the `ManagedObject` rows of the object: owned
 fields from `ManagedObject.fields`, each compared with the object now
 (`read_field`/`read_m2m`, as the planner does) to mark NetBox edits.
+It skips a device that has a binding: there `DeviceFortiGatePanel` shows
+the same rows (`inc/managed_rows.html`) inside the one "FortiGate" panel,
+so the device page has a single panel.
 
 ## Working with netbox-change-approval
 

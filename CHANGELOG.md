@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.9.0 (2026-10-25)
+
+Fixed:
+
+- A FortiGate's device page showed two panels, "FortiGate" and "Managed by
+  FortiGate", with overlapping information. They are now one "FortiGate"
+  panel: imported as, firmware, last import, the fields the importer owns on
+  the device (and which were edited in NetBox), last synced, and the Import
+  configuration button.
+
 ## 0.8.0 (2026-10-24)
 
 New:

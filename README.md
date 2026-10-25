@@ -52,7 +52,9 @@ on the firewall, and the plan only shows what changed in NetBox since.
 - **Managed by FortiGate**: every NetBox object the importer manages shows
   a panel with its FortiGate, the fields the importer owns, the last import
   that synced it, and which owned fields were edited in NetBox since (the
-  next import asks what to keep).
+  next import asks what to keep). On the FortiGate's own device page this
+  is part of the single "FortiGate" panel, next to its firmware, last import
+  and the Import configuration button.
 
 ## What it reads
 

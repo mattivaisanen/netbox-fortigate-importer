@@ -33,18 +33,14 @@
       {% csrf_token %}
       <button type="submit" class="btn btn-info"><i class="mdi mdi-test-tube"></i> {% trans "Dry run" %}</button>
     </form>
-    <form action="{% url 'plugins:netbox_fortigate_importer:importrun_apply' pk=object.pk %}" method="post" class="d-inline"
-          onsubmit="return confirm('{% trans "Write the approved changes to NetBox?" %}{% if summary.pending %} {% blocktrans with n=summary.pending %}{{ n }} changes are not reviewed and will be skipped.{% endblocktrans %}{% endif %}');">
-      {% csrf_token %}
-      <button type="submit" class="btn btn-success"><i class="mdi mdi-check-all"></i> {% trans "Apply" %}</button>
-    </form>
+    <button type="button" class="btn btn-success" data-bs-toggle="modal" data-bs-target="#fgi-apply-modal">
+      <i class="mdi mdi-check-all"></i> {% trans "Apply" %}
+    </button>
   {% endif %}
   {% if can_rollback and not active_job %}
-    <form action="{% url 'plugins:netbox_fortigate_importer:importrun_rollback' pk=object.pk %}" method="post" class="d-inline"
-          onsubmit="return confirm('{% trans "Undo everything this import wrote to NetBox?" %}');">
-      {% csrf_token %}
-      <button type="submit" class="btn btn-warning"><i class="mdi mdi-undo-variant"></i> {% trans "Roll back" %}</button>
-    </form>
+    <button type="button" class="btn btn-warning" data-bs-toggle="modal" data-bs-target="#fgi-rollback-modal">
+      <i class="mdi mdi-undo-variant"></i> {% trans "Roll back" %}
+    </button>
   {% endif %}
   {% if object.status == 'planned' or object.status == 'parsed' %}
     <form action="{% url 'plugins:netbox_fortigate_importer:importrun_discard' pk=object.pk %}" method="post" class="d-inline">
@@ -237,6 +233,51 @@
     </div>
     {% endif %}
   </form>
+</div>
+{% endif %}
+
+{# Confirmation dialogs for the Apply and Roll back buttons. #}
+{% if can_apply and not active_job %}
+<div class="modal fade" id="fgi-apply-modal" tabindex="-1" aria-labelledby="fgi-apply-title" aria-hidden="true">
+  <div class="modal-dialog">
+    <form action="{% url 'plugins:netbox_fortigate_importer:importrun_apply' pk=object.pk %}" method="post" class="modal-content">
+      {% csrf_token %}
+      <div class="modal-header">
+        <h5 class="modal-title" id="fgi-apply-title">{% trans "Apply Import" %}</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="{% trans 'Close' %}"></button>
+      </div>
+      <div class="modal-body">
+        <p class="mb-0">{% trans "Write the approved changes to NetBox?" %}</p>
+        {% if summary.pending %}
+          <p class="mt-2 mb-0 text-warning">{% blocktrans with n=summary.pending %}{{ n }} changes are not reviewed and will be skipped.{% endblocktrans %}</p>
+        {% endif %}
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">{% trans "Cancel" %}</button>
+        <button type="submit" class="btn btn-success"><i class="mdi mdi-check-all"></i> {% trans "Apply" %}</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endif %}
+{% if can_rollback and not active_job %}
+<div class="modal fade" id="fgi-rollback-modal" tabindex="-1" aria-labelledby="fgi-rollback-title" aria-hidden="true">
+  <div class="modal-dialog">
+    <form action="{% url 'plugins:netbox_fortigate_importer:importrun_rollback' pk=object.pk %}" method="post" class="modal-content">
+      {% csrf_token %}
+      <div class="modal-header">
+        <h5 class="modal-title" id="fgi-rollback-title">{% trans "Roll Back Import" %}</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="{% trans 'Close' %}"></button>
+      </div>
+      <div class="modal-body">
+        <p class="mb-0">{% trans "Undo everything this import wrote to NetBox?" %}</p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">{% trans "Cancel" %}</button>
+        <button type="submit" class="btn btn-warning"><i class="mdi mdi-undo-variant"></i> {% trans "Roll back" %}</button>
+      </div>
+    </form>
+  </div>
 </div>
 {% endif %}
 {% endblock %}

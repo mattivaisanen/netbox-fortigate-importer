@@ -7,3 +7,8 @@ dist/
 venv/
 .pytest_cache/
 .coverage
+
+# Local assistant notes, never committed
+CLAUDE.md
+CLAUDE.local.md
+.claude/

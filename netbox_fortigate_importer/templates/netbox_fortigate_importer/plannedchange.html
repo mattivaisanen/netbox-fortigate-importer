@@ -5,7 +5,7 @@
 {% block title %}{{ object.get_action_display }}: {{ object.label|default:object.key }}{% endblock %}
 
 {% block breadcrumbs %}
-  <li class="breadcrumb-item"><a href="{% url 'plugins:netbox_fortigate_importer:importrun_list' %}">{% trans "Import runs" %}</a></li>
+  <li class="breadcrumb-item"><a href="{% url 'plugins:netbox_fortigate_importer:importrun_list' %}">{% trans "Import Runs" %}</a></li>
   <li class="breadcrumb-item"><a href="{{ object.run.get_absolute_url }}">{{ object.run }}</a></li>
 {% endblock %}
 
@@ -44,7 +44,7 @@
   <div class="col col-12 col-xl-8">
     <div class="card">
       <h2 class="card-header">
-        {% if object.action == 'create' %}{% trans "New object" %}{% elif object.action == 'delete' or object.action == 'deprecate' or object.action == 'unmanage' %}{% trans "Removal" %}{% else %}{% trans "Fields" %}{% endif %}
+        {% if object.action == 'create' %}{% trans "New Object" %}{% elif object.action == 'delete' or object.action == 'deprecate' or object.action == 'unmanage' %}{% trans "Removal" %}{% else %}{% trans "Fields" %}{% endif %}
       </h2>
       {% if object.diff %}
       <table class="table table-hover attr-table mb-0">

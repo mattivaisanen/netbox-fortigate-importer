@@ -9,12 +9,12 @@ menu = PluginMenu(
         (_('Import'), (
             PluginMenuItem(
                 link='plugins:netbox_fortigate_importer:importrun_upload',
-                link_text=_('New import'),
+                link_text=_('New Import'),
                 permissions=['netbox_fortigate_importer.add_importrun'],
             ),
             PluginMenuItem(
                 link='plugins:netbox_fortigate_importer:importrun_list',
-                link_text=_('Import runs'),
+                link_text=_('Import Runs'),
                 permissions=['netbox_fortigate_importer.view_importrun'],
             ),
         )),

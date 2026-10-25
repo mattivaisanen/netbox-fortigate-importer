@@ -252,7 +252,7 @@ class ImportRunFirewallChangesView(generic.ObjectView):
     """What changed on the firewall itself since an earlier import of it."""
     queryset = ImportRun.objects.select_related('binding')
     template_name = 'netbox_fortigate_importer/importrun_firewall_changes.html'
-    tab = ViewTab(label=gettext_lazy('Firewall changes'), visible=lambda run: run.binding_id is not None, weight=500)
+    tab = ViewTab(label=gettext_lazy('Firewall Changes'), visible=lambda run: run.binding_id is not None, weight=500)
 
     def get_extra_context(self, request, instance):
         runs = ImportRun.objects.restrict(request.user, 'view').filter(binding_id=instance.binding_id) \

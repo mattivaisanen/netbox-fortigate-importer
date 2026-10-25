@@ -13,8 +13,8 @@ from netbox.plugins import PluginConfig
 class FortiGateImporterConfig(PluginConfig):
     name = 'netbox_fortigate_importer'
     verbose_name = 'FortiGate Importer'
-    description = 'Import FortiGate configurations with delta sync, review, dry run and rollback.'
-    version = '0.9.0'
+    description = 'Import FortiGate configurations into NetBox, with delta sync, review, dry run and rollback.'
+    version = '0.10.0'
     author = 'Matti'
     base_url = 'fortigate-importer'
     # Only claim what CI tests (.github/workflows/test.yml).

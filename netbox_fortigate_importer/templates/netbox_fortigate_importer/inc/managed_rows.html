@@ -16,5 +16,5 @@
 <tr>
   <th scope="row">{% trans "Last synced" %}</th>
   <td>{% if row.last_run %}<a href="{{ row.last_run.get_absolute_url }}">#{{ row.last_run.pk }}</a> <span class="text-muted small">{{ row.updated|timesince }}</span>{% else %}{{ ''|placeholder }}{% endif %}
-    {% if not row.confirmed %}<span class="badge text-bg-orange">{% trans "waiting for approval" %}</span>{% endif %}</td>
+    {% if not row.confirmed %}<span class="badge text-bg-orange">{% trans "pending" %}</span>{% endif %}</td>
 </tr>

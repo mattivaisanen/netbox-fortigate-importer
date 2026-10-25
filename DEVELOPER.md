@@ -319,7 +319,7 @@ sent again with its password without choosing the file again.
 - `compare()` lists firewall changes between two runs' data. List items are
   matched by `id` (policies, DHCP servers), `seq` (static routes) or
   `name`, with the address family; single blocks (BGP, OSPF, HA, settings)
-  are compared key by key. Shown on the run's "Firewall changes" tab.
+  are compared key by key. Shown on the run's "Firewall Changes" tab.
 
 `journal.py` writes one `JournalEntry` per apply and rollback, after the
 transaction commits and outside its request, so it is not part of the
@@ -348,7 +348,7 @@ the user, so change-approval decides like for any edit:
 - Items run under change-approval's `BatchCollector` (RAISE mode), like a
   bulk edit: a gated update or delete raises `ChangeApprovalRequired`; the
   importer rolls back that item's savepoint, saves the request and marks
-  the item "waiting for approval". A gated delete that change-approval's
+  the item "Pending". A gated delete that change-approval's
   `wrap_model_delete` isolated itself is seen by the growing queue. A
   create is written and marked pending by change-approval itself.
 - An object with a pending request is "blocked".
@@ -371,3 +371,7 @@ delta, conflicts, drift, rollback, two firewalls), `tests/test_views.py`
 firewall changes) and
 `tests/test_change_approval.py`, `tests/test_security.py` and
 `tests/test_routing.py` (skipped unless the plugin is installed).
+
+Fixtures in `tests/fixtures/` are not part of the wheel, so run the tests
+from a checkout (`pip install -e`). CI runs on pull requests and on manual
+runs (`workflow_dispatch`), not on pushes to `main`.

@@ -1,6 +1,19 @@
 # Changelog
 
-## Unreleased
+## 0.10.0 (2026-10-26)
+
+Changed:
+
+- Apply and Roll back ask for confirmation in a NetBox dialog instead of
+  the browser's pop-up.
+- Menu items, card titles and the import tab use Title Case like NetBox
+  itself ("New Import", "Import Runs", "Firewall Changes").
+- The status "Waiting for approval" is now "Pending", the same word
+  netbox-change-approval uses.
+
+Removed:
+
+- Test configurations are no longer installed with the plugin.
 
 ## 0.9.0 (2026-10-25)
 

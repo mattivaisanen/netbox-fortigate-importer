@@ -8,7 +8,7 @@ deleted objects wait for a person to decide.
 
 ## How an import works
 
-1. **Upload** under *FortiGate → New import*: drop the file on the page.
+1. **Upload** under *FortiGate → New Import*: drop the file on the page.
    An encrypted backup asks for its password.
 2. **Match**: the firewall is found by its serial number, or by its
    hostname when exactly one FortiGate has it and no serial number says
@@ -41,7 +41,7 @@ on the firewall, and the plan only shows what changed in NetBox since.
 
 ## Following a firewall over time
 
-- **Firewall changes** (a tab on every import): what changed in the
+- **Firewall Changes** (a tab on every import): what changed in the
   FortiGate's own configuration since its previous import, whatever NetBox
   has: policies, addresses, routes, VPNs, settings added, changed or
   removed, field by field. Compare with any other import of the same
@@ -176,5 +176,6 @@ Then restart NetBox and its worker.
 
 ## License
 
-Apache-2.0. Test configurations from other projects are listed with their
-licences in `netbox_fortigate_importer/tests/fixtures/third_party/README.md`.
+Apache License 2.0, see [LICENSE](LICENSE). Test configurations from other
+projects are listed with their licenses in
+`netbox_fortigate_importer/tests/fixtures/third_party/README.md`.

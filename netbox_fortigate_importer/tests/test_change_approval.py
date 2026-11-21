@@ -2,6 +2,7 @@
 from unittest import skipUnless
 
 from django.contrib.auth import get_user_model
+from django.test import TestCase
 
 from dcim.models import Interface
 
@@ -39,9 +40,9 @@ class ChangeApprovalTest(ImportTestCase):
         return run
 
     def test_failed_apply_leaves_nothing_waiting(self):
-        from netbox_change_approval.models import ChangeRequest
-
         from unittest import mock
+
+        from netbox_change_approval.models import ChangeRequest
 
         binding, _ = self.first_import()
         data = data_of(HQ)
@@ -174,3 +175,63 @@ class ChangeApprovalTest(ImportTestCase):
         self.assertEqual(row.outcome, OutcomeChoices.SUBMITTED, row.error)
         ChangeRequest.objects.get(pk=row.change_request_id).apply(self.user)
         self.assertFalse(ManagedObject.objects.filter(binding=binding, key=row.key).exists())
+
+
+@skipUnless(integrations.has_change_approval(), 'netbox-change-approval is not installed')
+class ChangeApprovalInternalsTest(TestCase):
+    """
+    integrations/change_approval.py uses netbox-change-approval's internals,
+    which have no stability promise. This fails loudly, naming what moved,
+    when an upgrade renames any of them.
+    """
+    # module: names (an "Name.attr" entry checks an attribute of Name)
+    USED = {
+        'netbox_change_approval.bulk': ['BatchCollector', 'BatchCollector.RAISE', 'BatchCollector.record',
+                                        'collecting'],
+        'netbox_change_approval.context': ['batch_scope'],
+        'netbox_change_approval.changesets': ['submit'],
+        'netbox_change_approval.exceptions': ['ChangeApprovalRequired'],
+        'netbox_change_approval.models': ['ChangeRequest', 'ChangeRequest.retract', 'ChangeSet',
+                                          'ChangeSet.requests', 'StatusChoices', 'StatusChoices.PENDING',
+                                          'StatusChoices.APPLIED'],
+    }
+    #: Model fields queried or read.
+    FIELDS = {
+        'ChangeRequest': ['batch_id', 'content_type', 'object_id', 'status'],
+        'ChangeSet': ['batch_id', 'name', 'created_by'],
+    }
+
+    def test_names_exist(self):
+        import importlib
+
+        missing = []
+        for module_name, names in self.USED.items():
+            module = importlib.import_module(module_name)
+            for name in names:
+                obj = module
+                for part in name.split('.'):
+                    obj = getattr(obj, part, None)
+                    if obj is None:
+                        break
+                if obj is None:
+                    missing.append(f'{module_name}.{name}')
+        self.assertEqual(missing, [], 'netbox-change-approval moved names the importer uses')
+
+    def test_fields_exist(self):
+        from netbox_change_approval import models
+
+        missing = []
+        for model_name, fields in self.FIELDS.items():
+            model = getattr(models, model_name)
+            names = {field.name for field in model._meta.get_fields()}
+            missing += [f'{model_name}.{field}' for field in fields if field not in names]
+        self.assertEqual(missing, [], 'netbox-change-approval renamed fields the importer uses')
+
+    def test_exception_and_collector_shape(self):
+        import inspect
+
+        from netbox_change_approval.bulk import BatchCollector
+        from netbox_change_approval.exceptions import ChangeApprovalRequired
+
+        self.assertIn('locked', inspect.signature(ChangeApprovalRequired).parameters)
+        self.assertTrue(hasattr(BatchCollector(), 'queued'))

@@ -10,7 +10,11 @@ from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Site
 
 from netbox_fortigate_importer import applier, rollback
 from netbox_fortigate_importer.models import (
-    ActionChoices, DecisionChoices, FortiGateBinding, ImportRun, RunStatusChoices,
+    ActionChoices,
+    DecisionChoices,
+    FortiGateBinding,
+    ImportRun,
+    RunStatusChoices,
 )
 
 from .utils import BRANCH, encrypt_backup, read
@@ -225,14 +229,14 @@ class ViewTest(ViewBase):
     def test_error_reports_hide_the_file_and_password(self):
         import sys
 
+        # Made at run time (the report quotes this test's source lines) and
+        # kept off this frame's local variables (the report lists them too).
+        import uuid
+
         from django.test import RequestFactory
         from django.views.debug import ExceptionReporter
 
         from netbox_fortigate_importer.views import ImportRunUploadView
-
-        # Made at run time (the report quotes this test's source lines) and
-        # kept off this frame's local variables (the report lists them too).
-        import uuid
 
         self.marks = (uuid.uuid4().hex, uuid.uuid4().hex)
         request = RequestFactory().post(reverse(URL + 'importrun_upload'), {
@@ -353,8 +357,8 @@ class APITest(ViewBase):
 
 
     def test_run_actions_need_only_their_own_permission(self):
-        from users.models import ObjectPermission
         from core.models import ObjectType
+        from users.models import ObjectPermission
 
         device = Device.objects.create(name='b1', site=self.site, device_type=self.device_type, role=self.role)
         FortiGateBinding.objects.create(name='Branch', device=device, serial='FGT60FTK21005678')

@@ -6,7 +6,13 @@ from dcim.models import Device
 from netbox.filtersets import BaseFilterSet, NetBoxModelFilterSet
 
 from .models import (
-    ActionChoices, DecisionChoices, FortiGateBinding, ImportRun, OutcomeChoices, PlannedChange, RunStatusChoices,
+    ActionChoices,
+    DecisionChoices,
+    FortiGateBinding,
+    ImportRun,
+    OutcomeChoices,
+    PlannedChange,
+    RunStatusChoices,
 )
 
 

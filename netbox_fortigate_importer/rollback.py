@@ -8,7 +8,10 @@ recreated with its old ID. It runs as one request with its own request ID, so
 the rollback is in the change log too.
 
 Rollback refuses when any of those objects was changed after the import (by
-someone, or by a later import): it would overwrite that newer work. The
+someone, or by a later import): it would overwrite that newer work. Later
+changes are found in the change log and, for writes that leave no change log
+entry (bulk updates with QuerySet.update(), raw SQL), by comparing each
+object's owned fields with what the import wrote (ManagedObject.fields). The
 importer's records (ManagedObject) go back to how they were before the apply.
 
 With netbox-change-approval, requests of the import that still wait for a
@@ -31,8 +34,9 @@ class RollbackError(Exception):
 
 
 def _changes(run):
-    from core.models import ObjectChange
     from django.contrib.contenttypes.models import ContentType
+
+    from core.models import ObjectChange
     from extras.models import Tag
 
     # The import tag stays: other imports' objects may carry it. Change
@@ -63,6 +67,39 @@ def later_edits(run, changes=None):
     for change in later.order_by('time'):
         if (change.changed_object_type_id, change.changed_object_id) in objects:
             found.append((change.object_repr, change.user_name, change.time))
+    return found
+
+
+def silent_edits(run):
+    """
+    Objects this import wrote whose owned fields no longer hold what it
+    wrote, though the change log shows no later change: [repr]. Catches
+    writes that skip the change log, which later_edits() cannot see.
+    """
+    from .mappers.base import read_field, read_m2m
+    from .planner import META
+
+    found = []
+    managed = ManagedObject.objects.filter(binding_id=run.binding_id, last_run=run, confirmed=True) \
+        .select_related('object_type')
+    for record in managed:
+        model = record.object_type.model_class()
+        obj = model.objects.filter(pk=record.object_id).first() if model else None
+        if obj is None:
+            continue  # gone: the change log check reports a delete
+        for name, written in (record.fields or {}).items():
+            if name == META:
+                continue
+            try:
+                if model._meta.get_field(name.split('.')[0]).many_to_many:
+                    current = read_m2m(obj, name)
+                else:
+                    current = read_field(obj, name)
+            except Exception:  # noqa: BLE001 - a field the model no longer has
+                continue
+            if current != written:
+                found.append(str(obj))
+                break
     return found
 
 
@@ -165,6 +202,11 @@ def rollback(run, user):
                 names = ', '.join(sorted({repr_ for repr_, _, _ in edits})[:10])
                 raise RollbackError('Changed in NetBox after this import, so rollback would overwrite newer '
                                     f'work: {names}')
+            silent = silent_edits(run)
+            if silent:
+                names = ', '.join(sorted(set(silent))[:10])
+                raise RollbackError('Changed in NetBox after this import without a change log entry (a bulk '
+                                    f'update by a script or plugin), so rollback would overwrite it: {names}')
             newer = run.binding.runs.filter(applied__gt=run.applied).exclude(pk=run.pk) if run.binding_id else None
             if newer is not None and newer.exclude(status=RunStatusChoices.ROLLED_BACK).exists():
                 raise RollbackError('A later import of this FortiGate was applied. Roll that one back first.')
@@ -195,9 +237,10 @@ def detach_device(run, changes):
     When the import created the FortiGate's device, unlink it before it is
     deleted. The FortiGate keeps how to create it, for the next apply.
     """
+    from django.contrib.contenttypes.models import ContentType
+
     from core.choices import ObjectChangeActionChoices as Action
     from dcim.models import Device
-    from django.contrib.contenttypes.models import ContentType
 
     binding = FortiGateBinding.objects.filter(pk=run.binding_id).first()
     if binding is None or binding.device_id is None:

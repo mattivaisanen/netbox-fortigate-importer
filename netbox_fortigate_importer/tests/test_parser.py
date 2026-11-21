@@ -5,7 +5,13 @@ from django.test import SimpleTestCase
 
 from netbox_fortigate_importer.extract import extract, load
 from netbox_fortigate_importer.parser import (
-    DecryptionError, ParseError, PasswordRequired, UnsupportedEncryption, UnsupportedFormat, parse, read_config_bytes,
+    DecryptionError,
+    ParseError,
+    PasswordRequired,
+    UnsupportedEncryption,
+    UnsupportedFormat,
+    parse,
+    read_config_bytes,
 )
 from netbox_fortigate_importer.parser.cli import tokenize_line
 from netbox_fortigate_importer.parser.layout import layout
@@ -336,7 +342,8 @@ class ExtractTests(SimpleTestCase):
         groups = {g['name']: g for g in root['address_groups']}
         self.assertEqual(groups['GRP-ALL-SITES']['members'], ['GRP-INTERNAL', 'NET-BRANCH1'])
         services = {s['name']: s for s in root['services']}
-        self.assertEqual(services['TCP-8000-8099']['tcp'][0], {'low': 8000, 'high': 8099, 'src_low': 1024, 'src_high': 65535})
+        self.assertEqual(services['TCP-8000-8099']['tcp'][0],
+                         {'low': 8000, 'high': 8099, 'src_low': 1024, 'src_high': 65535})
         policies = {p['id']: p for p in root['policies']}
         self.assertEqual(policies[3]['srcintf'], ['INSIDE', 'lan'])
         self.assertFalse(policies[5]['enabled'])
@@ -360,8 +367,10 @@ class ExtractTests(SimpleTestCase):
     def test_vpn(self):
         phase1 = self.hq['vdoms']['root']['ipsec_phase1'][0]
         self.assertEqual(phase1['remote_gw'], '198.51.100.20')
-        self.assertEqual(phase1['proposals'], [['aes256', 'sha256'], ['aes256gcm', 'prfsha384']]
-                         if isinstance(phase1['proposals'][0], list) else [('aes256', 'sha256'), ('aes256gcm', 'prfsha384')])
+        expected = [['aes256', 'sha256'], ['aes256gcm', 'prfsha384']]
+        if not isinstance(phase1['proposals'][0], list):
+            expected = [tuple(pair) for pair in expected]
+        self.assertEqual(phase1['proposals'], expected)
         self.assertEqual(phase1['dhgroups'], [20, 21])
         phase2 = self.hq['vdoms']['root']['ipsec_phase2'][0]
         self.assertEqual(phase2['src'], {'type': 'subnet', 'value': '10.0.0.0/8'})

@@ -13,7 +13,13 @@ from vpn.models import Tunnel, TunnelTermination
 from netbox_fortigate_importer import applier, integrations, planner, rollback
 from netbox_fortigate_importer.extract import load
 from netbox_fortigate_importer.models import (
-    ActionChoices, DecisionChoices, FortiGateBinding, ImportRun, ManagedObject, OutcomeChoices, RunStatusChoices,
+    ActionChoices,
+    DecisionChoices,
+    FortiGateBinding,
+    ImportRun,
+    ManagedObject,
+    OutcomeChoices,
+    RunStatusChoices,
 )
 
 from .utils import ALL_FULL_CONFIGS, BRANCH, HQ, read
@@ -366,6 +372,14 @@ class RollbackTest(ImportTestCase):
         with self.assertRaises(rollback.RollbackError):
             rollback.rollback(run, self.user)
         self.assertTrue(IPAddress.objects.exists())
+
+    def test_rollback_refuses_to_overwrite_edits_without_change_log(self):
+        # A bulk QuerySet.update() (another plugin, a script) writes no change log entry.
+        binding, run = self.first_import()
+        Interface.objects.filter(device=binding.device, name='wan1').update(description='Bulk edit')
+        with self.assertRaisesRegex(rollback.RollbackError, 'without a change log entry'):
+            rollback.rollback(run, self.user)
+        self.assertEqual(Interface.objects.get(device=binding.device, name='wan1').description, 'Bulk edit')
 
 
 class TwoFirewallsTest(ImportTestCase):

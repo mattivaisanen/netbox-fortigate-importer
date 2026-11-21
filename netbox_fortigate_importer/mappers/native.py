@@ -75,14 +75,32 @@ class NativeMapper:
     """Builds the core NetBox objects. One instance per plan."""
 
     def __init__(self, ctx):
-        from dcim.models import Device, DeviceType, Interface, Manufacturer, Platform, VirtualChassis, \
-            VirtualDeviceContext
-        from ipam.models import ASN, RIR, VLAN, VRF, FHRPGroup, FHRPGroupAssignment, IPAddress, IPRange, \
-            Prefix, VLANGroup
+        from dcim.models import (
+            Device,
+            DeviceType,
+            Interface,
+            Manufacturer,
+            Platform,
+            VirtualChassis,
+            VirtualDeviceContext,
+        )
+        from ipam.models import (
+            ASN,
+            RIR,
+            VLAN,
+            VRF,
+            FHRPGroup,
+            FHRPGroupAssignment,
+            IPAddress,
+            IPRange,
+            Prefix,
+            VLANGroup,
+        )
 
         self.ctx = ctx
         self.m = {
-            'device': Device, 'devicetype': DeviceType, 'interface': Interface, 'manufacturer': Manufacturer, 'platform': Platform,
+            'device': Device, 'devicetype': DeviceType, 'interface': Interface, 'manufacturer': Manufacturer,
+            'platform': Platform,
             'vc': VirtualChassis, 'vdc': VirtualDeviceContext, 'asn': ASN, 'rir': RIR, 'vlan': VLAN,
             'vrf': VRF, 'fhrp': FHRPGroup, 'fhrp_assignment': FHRPGroupAssignment, 'ip': IPAddress,
             'iprange': IPRange, 'prefix': Prefix, 'vlangroup': VLANGroup,

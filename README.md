@@ -132,9 +132,16 @@ importer needs is saved on the import run.
 
 - NetBox **4.7** or later. Tested with NetBox 4.7.0 and 4.7.3.
 - No other plugins required. When installed, these are used too:
-  netbox-security (firewall objects), netbox-routing (static routes, BGP,
-  OSPF, route filters) and netbox-change-approval (imports go through
-  approval for users without bypass).
+
+  | Plugin | Used for | Tested version |
+  | --- | --- | --- |
+  | netbox-security | Firewall objects | 1.6.8 |
+  | netbox-routing | Static routes, BGP, OSPF, route filters | 0.5.1 |
+  | netbox-change-approval | Imports go through approval for users without bypass | 0.5.4 |
+
+  The importer writes into these plugins' models, so other versions may
+  fail or miss fields. NetBox logs a warning at startup when an installed
+  version differs from the tested one in its first two numbers.
 
 ## Installation
 
@@ -157,7 +164,8 @@ cd /opt/netbox/netbox && python manage.py migrate
 Settings and permissions: [docs/configuration.md](docs/configuration.md).
 
 Dry runs, applies and rollbacks run as NetBox background jobs, so NetBox's
-worker (`manage.py rqworker`) must be running.
+worker (`manage.py rqworker`) must be running. The worker also deletes old
+import runs once a day (`run_retention_days`).
 
 ## REST API
 
@@ -173,6 +181,25 @@ cd /opt/netbox/netbox && python manage.py migrate
 ```
 
 Then restart NetBox and its worker.
+
+## Uninstalling
+
+The importer's own records (FortiGates, import runs) have change log,
+journal and tag rows in NetBox's tables. Remove those first, while the
+plugin is still installed, then its tables:
+
+```bash
+cd /opt/netbox/netbox
+python manage.py prepare_fortigate_uninstall
+python manage.py migrate netbox_fortigate_importer zero
+```
+
+Then take `netbox_fortigate_importer` out of `PLUGINS`, restart NetBox and
+`pip uninstall netbox-fortigate-importer`. Everything the imports created
+(devices, interfaces, IP addresses, security and routing objects, the
+`fortigate` config context key and the import tag) is ordinary NetBox data
+and stays. `prepare_fortigate_uninstall --dry-run` shows what it would
+remove.
 
 ## License
 

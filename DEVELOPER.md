@@ -95,7 +95,11 @@ and with all of them installed.
     create, or would clear a reference on someone else's object such as a
     switch port's untagged VLAN (`cascade_victims()`, which also reads the
     collector's SET_NULL updates), or when the change log no longer has the
-    entries of the objects the apply created (retention). Changes approved
+    entries of the objects the apply created (retention). Writes that leave
+    no change log entry (a plugin's `QuerySet.update()`, raw SQL) are found
+    by comparing each object's owned fields with `ManagedObject.fields`
+    (`silent_edits()`); edits to fields the importer doesn't own are not
+    seen there, and rollback restores the old values over them. Changes approved
     later by their approver are not undone, so their records stay. The import tag
     and change-approval's own records are left alone.
 
@@ -339,7 +343,12 @@ so the device page has a single panel.
 
 ## Working with netbox-change-approval
 
-`integrations/change_approval.py`. The importer's own models are not
+`integrations/change_approval.py`. It uses change-approval's internals
+(`bulk.BatchCollector`, `bulk.collecting`, `context.batch_scope`,
+`changesets.submit`, `ChangeSet`, `ChangeRequest`, `StatusChoices`), which
+have no stability promise. `ChangeApprovalInternalsTest` lists every name
+and field used and fails, naming them, when an upgrade moves one. Switch to
+public helpers once change-approval offers them. The importer's own models are not
 NetBoxModel, so recording a run never needs approval. The apply runs as
 the user, so change-approval decides like for any edit:
 

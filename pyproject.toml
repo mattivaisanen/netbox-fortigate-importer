@@ -4,10 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "netbox-fortigate-importer"
-version = "0.10.0"
+version = "0.11.0"
 description = "Import FortiGate configurations into NetBox, with delta sync, review, dry run and rollback."
 requires-python = ">=3.10"
 license = "Apache-2.0"
+license-files = ["LICENSE"]
 readme = "README.md"
 authors = [{ name = "Matti" }]
 # No runtime dependencies beyond NetBox: Django comes with NetBox, and
@@ -16,13 +17,33 @@ authors = [{ name = "Matti" }]
 # min_version in netbox_fortigate_importer/__init__.py.
 dependencies = []
 
+[project.urls]
+Homepage = "https://github.com/mattivaisanen/netbox-fortigate-importer"
+Changelog = "https://github.com/mattivaisanen/netbox-fortigate-importer/blob/main/CHANGELOG.md"
+
 [tool.setuptools.packages.find]
 include = ["netbox_fortigate_importer*"]
 
 [tool.setuptools.package-data]
-netbox_fortigate_importer = [
-    "templates/netbox_fortigate_importer/*.html",
-    "templates/netbox_fortigate_importer/**/*.html",
-]
+netbox_fortigate_importer = ["templates/netbox_fortigate_importer/**/*.html"]
 # Test fixtures (sample configurations, some from other projects) stay in
 # the repository and are not shipped in the wheel. Tests run from a checkout.
+
+[tool.ruff]
+line-length = 120
+extend-exclude = ["netbox_fortigate_importer/migrations"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["netbox_fortigate_importer"]
+# NetBox's own apps get a section of their own, between Django and the plugin.
+section-order = ["future", "standard-library", "third-party", "netbox", "first-party", "local-folder"]
+split-on-trailing-comma = false
+
+[tool.ruff.lint.isort.sections]
+netbox = [
+    "account", "circuits", "core", "dcim", "extras", "ipam", "netbox", "tenancy", "users", "utilities",
+    "virtualization", "vpn", "wireless",
+]

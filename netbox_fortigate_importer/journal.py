@@ -63,6 +63,7 @@ def own_entries(objects):
     device deletes them with the device instead of refusing.
     """
     from django.contrib.contenttypes.models import ContentType
+
     from extras.models import JournalEntry
 
     by_type = {}

@@ -99,9 +99,10 @@ def expand_ports(ranges, which='dst'):
 
 class SecurityMapper:
     def __init__(self, ctx, existing=()):
+        from netbox_security import models as sec
+
         from dcim.models import Interface
         from ipam.models import IPRange, Prefix
-        from netbox_security import models as sec
 
         self.ctx = ctx
         self.m = {
@@ -600,7 +601,8 @@ class VdomMapper:
         zones = []
         for vip in vips:
             mapped = vip['mapped'][0]
-            mapped_ports = expand_ports([vip['mappedport']]) if vip.get('portforward') and vip.get('mappedport') else None
+            forwarded = vip.get('portforward') and vip.get('mappedport')
+            mapped_ports = expand_ports([vip['mappedport']]) if forwarded else None
             pool = self.nat_pool(f'{self.scope} VIP {vip["name"]}', f'{self.base}/vip/{vip["name"]}/pool',
                                  mapped['start'], mapped.get('end') or mapped['start'], f'VIP {vip["name"]}',
                                  ports=mapped_ports)

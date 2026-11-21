@@ -8,7 +8,8 @@ from django.urls import NoReverseMatch, reverse
 from django.utils.decorators import method_decorator
 from django.utils.formats import date_format
 from django.utils.timezone import localtime
-from django.utils.translation import gettext as _, gettext_lazy
+from django.utils.translation import gettext as _
+from django.utils.translation import gettext_lazy
 from django.views.decorators.csrf import csrf_exempt, csrf_protect
 from django.views.decorators.debug import sensitive_post_parameters, sensitive_variables
 from django.views.generic import View
@@ -19,17 +20,13 @@ from utilities.forms import restrict_form_fields
 from utilities.request import safe_for_redirect
 from utilities.views import ConditionalLoginRequiredMixin, ViewTab, register_model_view
 
-from . import compare, dependencies, filtersets, forms, planner, services, tables
-from . import jobs
+from . import compare, dependencies, filtersets, forms, jobs, planner, services, tables
 from .jobs import active_job
 from .mappers import MapperError
-from .models import (
-    ActionChoices, DecisionChoices, FortiGateBinding, ImportRun, PlannedChange, RunStatusChoices,
-)
+from .models import ActionChoices, DecisionChoices, FortiGateBinding, ImportRun, PlannedChange, RunStatusChoices
 from .parser import ParseError
 from .parser.files import ConfigFileError, PasswordRequired, UnsupportedEncryption
 from .settings import get_setting
-
 
 #
 # FortiGates (bindings)
@@ -191,7 +188,10 @@ def same_file_text(same):
     return _(
         'This is the same configuration as import #{pk} ({status}, {when}). Nothing changed on the firewall; '
         'the plan only shows what changed in NetBox since.'
-    ).format(pk=same.pk, status=same.get_status_display(), when=date_format(localtime(same.created), 'SHORT_DATETIME_FORMAT'))
+    ).format(
+        pk=same.pk, status=same.get_status_display(),
+        when=date_format(localtime(same.created), 'SHORT_DATETIME_FORMAT'),
+    )
 
 
 #
@@ -545,8 +545,8 @@ class PlannedChangeView(generic.ObjectView):
         return {
             'can_decide': instance.run.status == RunStatusChoices.PLANNED and instance.writes and
             request.user.has_perm('netbox_fortigate_importer.change_plannedchange'),
-            'decisions': [(v, l) for v, l, *_ in DecisionChoices.CHOICES
-                          if v != DecisionChoices.KEEP_NETBOX or instance.action == ActionChoices.CONFLICT],
+            'decisions': [(value, label) for value, label, *_ in DecisionChoices.CHOICES
+                          if value != DecisionChoices.KEEP_NETBOX or instance.action == ActionChoices.CONFLICT],
             'dry_run': (instance.run.dry_run or {}).get('items', {}).get(instance.key),
             'needs': self.needs(instance),
             'change_request_url': change_request_url(instance.change_request_id),

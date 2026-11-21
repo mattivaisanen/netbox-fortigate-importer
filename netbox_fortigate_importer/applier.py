@@ -28,9 +28,15 @@ from django.db import transaction
 from django.utils import timezone
 
 from . import integrations, journal
-from .mappers.base import Ref, is_ref_token, ref_key, unescape_literal, read_field, read_m2m, sort_values, write_field
+from .mappers.base import Ref, is_ref_token, read_field, read_m2m, ref_key, sort_values, unescape_literal, write_field
 from .models import (
-    ActionChoices, DecisionChoices, ImportRun, ManagedObject, OutcomeChoices, PlannedChange, RunStatusChoices,
+    ActionChoices,
+    DecisionChoices,
+    ImportRun,
+    ManagedObject,
+    OutcomeChoices,
+    PlannedChange,
+    RunStatusChoices,
 )
 from .planner import META
 
@@ -451,8 +457,9 @@ class Applier:
         )
 
     def import_tag(self):
-        from extras.models import Tag
         from django.utils.text import slugify
+
+        from extras.models import Tag
 
         name = self.options.get('import_tag')
         if not name:

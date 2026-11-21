@@ -13,8 +13,7 @@ from rest_framework.routers import APIRootView
 from netbox.api.authentication import TokenPermissions
 from netbox.api.viewsets import NetBoxModelViewSet, NetBoxReadOnlyModelViewSet
 
-from .. import filtersets, planner, services
-from .. import jobs
+from .. import filtersets, jobs, planner, services
 from ..jobs import active_job
 from ..mappers import MapperError
 from ..models import FortiGateBinding, ImportRun, PlannedChange, RunStatusChoices

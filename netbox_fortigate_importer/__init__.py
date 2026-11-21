@@ -14,7 +14,7 @@ class FortiGateImporterConfig(PluginConfig):
     name = 'netbox_fortigate_importer'
     verbose_name = 'FortiGate Importer'
     description = 'Import FortiGate configurations into NetBox, with delta sync, review, dry run and rollback.'
-    version = '0.10.0'
+    version = '0.11.0'
     author = 'Matti'
     base_url = 'fortigate-importer'
     # Only claim what CI tests (.github/workflows/test.yml).
@@ -43,6 +43,9 @@ class FortiGateImporterConfig(PluginConfig):
         'continue_on_error': False,
         # Write a journal entry on the firewall's device for every apply and rollback.
         'journal_entries': True,
+        # Delete import runs older than this many days that nothing needs any
+        # more (see retention.py). 0 keeps every run.
+        'run_retention_days': 90,
     }
 
     menu = 'navigation.menu'
@@ -50,7 +53,7 @@ class FortiGateImporterConfig(PluginConfig):
 
     def ready(self):
         super().ready()
-        from . import integrations
+        from . import integrations, retention  # noqa: F401 - retention registers its daily job
 
         integrations.connect()
 

@@ -7,12 +7,20 @@ from netbox.api.serializers import ValidatedModelSerializer
 from netbox.api.serializers.features import ChangeLogMessageSerializer, TaggableModelSerializer
 
 from ..models import (
-    ActionChoices, DecisionChoices, FortiGateBinding, ImportRun, OutcomeChoices, PlannedChange, RunStatusChoices,
+    ActionChoices,
+    DecisionChoices,
+    FortiGateBinding,
+    ImportRun,
+    OutcomeChoices,
+    PlannedChange,
+    RunStatusChoices,
 )
 
 
 class FortiGateBindingSerializer(TaggableModelSerializer, ChangeLogMessageSerializer, ValidatedModelSerializer):
-    url = serializers.HyperlinkedIdentityField(view_name='plugins-api:netbox_fortigate_importer-api:fortigatebinding-detail')
+    url = serializers.HyperlinkedIdentityField(
+        view_name='plugins-api:netbox_fortigate_importer-api:fortigatebinding-detail',
+    )
     device = DeviceSerializer(nested=True)
     virtual_chassis = VirtualChassisSerializer(nested=True, required=False, allow_null=True)
     asn_rir = RIRSerializer(nested=True, required=False, allow_null=True)

@@ -1,7 +1,8 @@
 """Imports respect NetBox permissions, never take other work with them and never race."""
+from django.contrib.auth import get_user_model
+
 from core.models import ObjectType
 from dcim.models import Device, Interface
-from django.contrib.auth import get_user_model
 from ipam.models import VLAN, IPAddress
 from users.models import ObjectPermission
 

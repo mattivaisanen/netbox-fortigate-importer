@@ -77,7 +77,10 @@ def interfaces(global_section, warnings):
         if section.is_enabled('secondary-IP'):
             for _, sec in section.table('secondaryip'):
                 tokens = sec.get_list('ip')
-                value = to_interface_ip(*tokens[:2]) if len(tokens) >= 2 else to_interface_ip(tokens[0] if tokens else None)
+                if len(tokens) >= 2:
+                    value = to_interface_ip(*tokens[:2])
+                else:
+                    value = to_interface_ip(tokens[0] if tokens else None)
                 if value:
                     secondary.append(value)
 

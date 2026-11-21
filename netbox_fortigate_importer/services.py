@@ -18,7 +18,6 @@ from .extract import load
 from .models import FortiGateBinding, ImportRun, RunStatusChoices
 from .parser.files import is_encrypted
 
-
 #: How much larger than the upload limit a compressed file may grow.
 INFLATE_FACTOR = 10
 

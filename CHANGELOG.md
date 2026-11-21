@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.11.0 (2026-11-21)
+
+New:
+
+- `manage.py prepare_fortigate_uninstall` removes the change log, journal
+  and tag rows of the importer's records, so NetBox keeps working after the
+  plugin is removed. See "Uninstalling" in the README.
+- Old import runs are deleted after `run_retention_days` (default 90) by a
+  daily job, or by hand with `manage.py prune_fortigate_runs`. Runs that
+  can still be rolled back, each FortiGate's latest run and runs waiting
+  for approval are kept.
+- A warning at startup when netbox-security, netbox-routing or
+  netbox-change-approval is installed in a version other than the tested
+  one.
+
+Fixed:
+
+- Rollback refuses when an object was changed after the import without a
+  change log entry (a bulk update by a script or plugin), instead of
+  restoring old values over that change.
+
+Changed:
+
+- CI tests with netbox-change-approval 0.5.4 and runs two jobs instead of
+  four.
+
 ## 0.10.0 (2026-10-26)
 
 Changed:

@@ -8,7 +8,12 @@ from dcim.models import Device, Interface, InterfaceTemplate
 from netbox_fortigate_importer import applier, dependencies, rollback
 from netbox_fortigate_importer.jobs import ImportRunJob, counts_text
 from netbox_fortigate_importer.models import (
-    ActionChoices, DecisionChoices, FortiGateBinding, ImportRun, OutcomeChoices, RunStatusChoices,
+    ActionChoices,
+    DecisionChoices,
+    FortiGateBinding,
+    ImportRun,
+    OutcomeChoices,
+    RunStatusChoices,
 )
 
 from .test_views import URL, ViewBase

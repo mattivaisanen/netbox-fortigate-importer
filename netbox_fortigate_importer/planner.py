@@ -31,7 +31,15 @@ from django.utils import timezone
 from .jobs import busy
 from .mappers import Context, collect
 from .mappers.base import (
-    Ref, escape_literals, model_field, model_label, normalize, read_field, read_m2m, snapshot, sort_values,
+    Ref,
+    escape_literals,
+    model_field,
+    model_label,
+    normalize,
+    read_field,
+    read_m2m,
+    snapshot,
+    sort_values,
 )
 from .models import ActionChoices, DecisionChoices, ImportRun, ManagedObject, PlannedChange, RunStatusChoices
 

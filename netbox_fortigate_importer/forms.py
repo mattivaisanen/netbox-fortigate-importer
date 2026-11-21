@@ -4,8 +4,8 @@ from django.utils.translation import gettext_lazy as _
 from dcim.models import Device, DeviceRole, DeviceType, Site, VirtualChassis
 from ipam.models import RIR
 from netbox.forms import NetBoxModelFilterSetForm, NetBoxModelForm
-from utilities.forms.forms import FilterForm
 from utilities.forms.fields import CommentField, DynamicModelChoiceField, TagFilterField
+from utilities.forms.forms import FilterForm
 from utilities.forms.rendering import FieldSet
 
 from .models import DecisionChoices, FortiGateBinding, RunStatusChoices

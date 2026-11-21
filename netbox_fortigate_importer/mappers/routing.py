@@ -87,9 +87,10 @@ def prefix_entry_bounds(prefix, ge, le):
 
 class RoutingMapper:
     def __init__(self, ctx, existing=()):
+        from netbox_routing import models as rt
+
         from dcim.models import Interface
         from ipam.models import ASN, RIR, IPAddress
-        from netbox_routing import models as rt
 
         self.ctx = ctx
         self.m = {

@@ -47,8 +47,15 @@ def tunnel_name(a, b):
 
 class VPNMapper:
     def __init__(self, native):
-        from vpn.models import IKEPolicy, IKEProposal, IPSecPolicy, IPSecProfile, IPSecProposal, Tunnel, \
-            TunnelTermination
+        from vpn.models import (
+            IKEPolicy,
+            IKEProposal,
+            IPSecPolicy,
+            IPSecProfile,
+            IPSecProposal,
+            Tunnel,
+            TunnelTermination,
+        )
 
         self.native = native
         self.ctx = native.ctx
